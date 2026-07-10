@@ -27,6 +27,8 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['skydesk.skyfinancia.com', '76.13.219.77', 'localhost', '127.0.0.1']
 
+CSRF_TRUSTED_ORIGINS = ['https://skydesk.skyfinancia.com']
+
 
 # Application definition
 
