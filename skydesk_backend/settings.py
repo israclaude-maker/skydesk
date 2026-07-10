@@ -25,7 +25,7 @@ SECRET_KEY = "django-insecure-!o@xu)8@=#kuc9f*39h%75eu2vit07_s!&@ssmjnaxmv&52w=k
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['skydesk.skyfinancia.com', '76.13.219.77', 'localhost', '127.0.0.1']
 
 
 # Application definition
