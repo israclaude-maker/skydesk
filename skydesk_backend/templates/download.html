@@ -24,7 +24,7 @@
         line-height: 1.65;
       }
       .hero {
-        max-width: 720px;
+        max-width: 900px;
         margin: 0 auto;
         text-align: center;
         padding: 80px 24px 20px;
@@ -37,13 +37,13 @@
         margin-bottom: 20px;
       }
       h1 {
-        font-size: 42px;
+        font-size: 46px;
         margin-bottom: 8px;
         text-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
       }
       .tagline {
         color: #cfe8ff;
-        font-size: 17px;
+        font-size: 18px;
       }
 
       .btn {
@@ -70,9 +70,9 @@
       }
 
       .section {
-        max-width: 780px;
+        max-width: 1100px;
         margin: 0 auto;
-        padding: 46px 24px;
+        padding: 55px 30px;
       }
       .section-label {
         text-transform: uppercase;
@@ -84,43 +84,60 @@
         text-align: center;
       }
       .section h2 {
-        font-size: 27px;
-        margin-bottom: 30px;
+        font-size: 30px;
+        margin-bottom: 34px;
         text-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
         text-align: center;
       }
-      .section p {
+      .section > p {
         color: #dceeff;
-        font-size: 15px;
-        margin-bottom: 14px;
-        max-width: 640px;
-        margin-left: auto;
-        margin-right: auto;
+        font-size: 15.5px;
+        margin-bottom: 16px;
+      }
+      .two-col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 40px;
+        align-items: start;
+      }
+      .two-col p {
+        color: #dceeff;
+        font-size: 15.5px;
+        margin-bottom: 16px;
       }
       .divider {
-        max-width: 720px;
+        max-width: 1100px;
         margin: 0 auto;
         border: none;
         border-top: 1px solid rgba(255, 255, 255, 0.12);
       }
 
-      /* Key Highlights - 3D hover cards */
+      /* Key Highlights - 3D hover cards, full width grid */
       .highlights-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 20px;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 22px;
+      }
+      @media (max-width: 900px) {
+        .highlights-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+      @media (max-width: 600px) {
+        .highlights-grid {
+          grid-template-columns: 1fr;
+        }
       }
       .highlight-card {
         background: rgba(255, 255, 255, 0.06);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 16px;
-        padding: 26px 22px;
+        padding: 28px 24px;
         box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
         transition:
           transform 0.25s ease,
           box-shadow 0.25s ease,
           background 0.25s ease;
-        transform-style: preserve-3d;
       }
       .highlight-card:hover {
         transform: translateY(-8px) rotateX(4deg) rotateY(-4deg);
@@ -128,62 +145,90 @@
         background: rgba(255, 255, 255, 0.1);
       }
       .highlight-card h3 {
-        font-size: 16px;
-        margin-bottom: 8px;
+        font-size: 17px;
+        margin-bottom: 10px;
         color: #ffffff;
       }
       .highlight-card p {
-        font-size: 13px;
+        font-size: 13.5px;
         color: #cfe8ff;
         margin: 0;
-        text-align: left;
+      }
+
+      /* Use cases */
+      .usecase-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 24px;
+      }
+      .usecase-card {
+        border-left: 3px solid #4facfe;
+        padding: 6px 22px;
+      }
+      .usecase-card h3 {
+        font-size: 16px;
+        margin-bottom: 8px;
+      }
+      .usecase-card p {
+        font-size: 14px;
+        color: #cfe8ff;
       }
 
       /* How to use */
-      .steps-list {
+      .steps-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 26px;
         counter-reset: step-counter;
-        list-style: none;
-        margin-top: 6px;
-        max-width: 640px;
-        margin-left: auto;
-        margin-right: auto;
       }
-      .steps-list li {
+      .step-card {
         counter-increment: step-counter;
         position: relative;
-        padding-left: 46px;
-        margin-bottom: 20px;
-        color: #dceeff;
-        font-size: 15px;
+        padding: 28px 22px 22px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
       }
-      .steps-list li::before {
+      .step-card::before {
         content: counter(step-counter);
-        position: absolute;
-        left: 0;
-        top: -2px;
-        width: 30px;
-        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
         border-radius: 50%;
         background: linear-gradient(145deg, #4facfe, #1a5fd6);
         color: white;
         font-weight: bold;
-        font-size: 14px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        font-size: 15px;
+        margin-bottom: 14px;
       }
-      .steps-list strong {
-        color: white;
+      .step-card h4 {
+        font-size: 15.5px;
+        margin-bottom: 8px;
+      }
+      .step-card p {
+        font-size: 13.5px;
+        color: #cfe8ff;
+        margin: 0;
+      }
+
+      /* Security note */
+      .security-box {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 18px;
+        padding: 36px 40px;
       }
 
       .cta-bottom {
         text-align: center;
-        padding: 55px 24px 90px;
+        padding: 60px 24px 90px;
         background: rgba(255, 255, 255, 0.04);
         border-top: 1px solid rgba(255, 255, 255, 0.1);
       }
       .cta-bottom h2 {
-        font-size: 26px;
+        font-size: 27px;
         margin-bottom: 10px;
       }
       .cta-bottom p {
@@ -197,6 +242,12 @@
         padding: 28px;
         font-size: 12px;
         color: #9fc2e6;
+      }
+
+      @media (max-width: 700px) {
+        .two-col {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
   </head>
@@ -223,41 +274,44 @@
           <h3>Encrypted</h3>
           <p>
             Every connection is end-to-end encrypted, so screen data and control
-            input stay private.
+            input stay private between the two connected devices, with no third
+            party able to intercept the session.
           </p>
         </div>
         <div class="highlight-card">
           <h3>Real-time</h3>
           <p>
-            Low-latency screen streaming with full mouse and keyboard control.
+            Low-latency screen streaming keeps the remote view responsive, with
+            full mouse and keyboard control that feels natural even over long
+            distances.
           </p>
         </div>
         <div class="highlight-card">
           <h3>Zero setup</h3>
           <p>
-            No router configuration, port forwarding, or network changes
-            required.
+            No router configuration, no port forwarding, and no network changes
+            required on either side. It simply works out of the box.
           </p>
         </div>
         <div class="highlight-card">
           <h3>ID-based</h3>
           <p>
-            Connect using a simple, unique Remote ID instead of complex network
-            addresses.
+            Connect using a simple, unique Remote ID instead of complex IP
+            addresses or network settings that most people never remember.
           </p>
         </div>
         <div class="highlight-card">
           <h3>Lightweight</h3>
           <p>
-            A small, quiet installer that stays out of your way until you need
-            it.
+            A small, quiet installer that stays out of your way, uses minimal
+            system resources, and doesn't slow down your computer.
           </p>
         </div>
         <div class="highlight-card">
           <h3>Simple</h3>
           <p>
-            Install, sign in, and share your Remote ID &mdash; connected in
-            seconds.
+            Install, sign in, and share your Remote ID. Most people are
+            connected and controlling a remote screen within seconds.
           </p>
         </div>
       </div>
@@ -268,22 +322,71 @@
     <div class="section">
       <div class="section-label">About</div>
       <h2>What is SkyDesk?</h2>
-      <p>
-        <strong>SkyDesk</strong> is a lightweight remote desktop application
-        that lets you connect to and control another computer over the internet,
-        using nothing more than a unique Remote ID.
-      </p>
-      <p>
-        Whether you're providing tech support to a family member, accessing your
-        work PC from home, or helping a colleague troubleshoot an issue, SkyDesk
-        gives you a live view of the remote screen along with full mouse and
-        keyboard control, all through an encrypted connection.
-      </p>
-      <p>
-        There's nothing to configure on your router or network. Install the app,
-        sign in, share your ID with the person on the other end, and you're
-        connected within seconds.
-      </p>
+      <div class="two-col">
+        <div>
+          <p>
+            <strong>SkyDesk</strong> is a lightweight remote desktop application
+            that lets you connect to and control another computer over the
+            internet, using nothing more than a unique Remote ID.
+          </p>
+          <p>
+            Whether you're providing tech support to a family member, accessing
+            your work PC from home, or helping a colleague troubleshoot an
+            issue, SkyDesk gives you a live view of the remote screen along with
+            full mouse and keyboard control, all through an encrypted
+            connection.
+          </p>
+        </div>
+        <div>
+          <p>
+            There's nothing to configure on your router or network. Install the
+            app, sign in, share your ID with the person on the other end, and
+            you're connected within seconds.
+          </p>
+          <p>
+            SkyDesk was built to strip away the complexity found in many remote
+            access tools, focusing instead on a fast, dependable connection that
+            just works when you need it most.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+
+    <div class="section">
+      <div class="section-label">Use Cases</div>
+      <h2>Where SkyDesk fits in</h2>
+      <div class="usecase-grid">
+        <div class="usecase-card">
+          <h3>Remote Tech Support</h3>
+          <p>
+            Help family or friends fix an issue on their computer without being
+            physically present.
+          </p>
+        </div>
+        <div class="usecase-card">
+          <h3>Work From Anywhere</h3>
+          <p>
+            Access your office desktop and files securely from home or while
+            travelling.
+          </p>
+        </div>
+        <div class="usecase-card">
+          <h3>Team Collaboration</h3>
+          <p>
+            Share a screen with a colleague to walk through a problem together
+            in real time.
+          </p>
+        </div>
+        <div class="usecase-card">
+          <h3>Quick Troubleshooting</h3>
+          <p>
+            Diagnose and fix issues on a customer's or client's machine remotely
+            and quickly.
+          </p>
+        </div>
+      </div>
     </div>
 
     <hr class="divider" />
@@ -291,24 +394,61 @@
     <div class="section">
       <div class="section-label">Getting Started</div>
       <h2>How to use it</h2>
-      <ol class="steps-list">
-        <li>
-          <strong>Install SkyDesk</strong> on your Windows PC using the
-          installer below.
-        </li>
-        <li>
-          <strong>Sign in</strong> with your account to receive your unique
-          Remote ID.
-        </li>
-        <li>
-          <strong>Share your Remote ID</strong> with whoever needs to connect to
-          your computer, or enter theirs to connect to them.
-        </li>
-        <li>
-          <strong>Accept the request</strong> on either end and the session
-          begins immediately, fully encrypted.
-        </li>
-      </ol>
+      <div class="steps-grid">
+        <div class="step-card">
+          <h4>Install SkyDesk</h4>
+          <p>
+            Download and run the installer on your Windows PC. Setup takes less
+            than a minute.
+          </p>
+        </div>
+        <div class="step-card">
+          <h4>Sign in</h4>
+          <p>
+            Log in with your account to receive your unique Remote ID, generated
+            automatically.
+          </p>
+        </div>
+        <div class="step-card">
+          <h4>Share your ID</h4>
+          <p>
+            Give your Remote ID to whoever needs access, or enter theirs to
+            connect to them.
+          </p>
+        </div>
+        <div class="step-card">
+          <h4>Connect instantly</h4>
+          <p>
+            Accept the request on either end and the session begins immediately,
+            fully encrypted.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+
+    <div class="section">
+      <div class="section-label">Security</div>
+      <h2>Built with privacy in mind</h2>
+      <div class="security-box">
+        <div class="two-col">
+          <div>
+            <p>
+              Every SkyDesk session runs over an encrypted connection, so what
+              happens on the remote screen and every keystroke or mouse movement
+              sent during control stays between the two connected devices.
+            </p>
+          </div>
+          <div>
+            <p>
+              Sessions only begin after an explicit request is accepted on the
+              receiving end, meaning no one can access your computer without
+              your direct approval at the moment of connection.
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="cta-bottom">
