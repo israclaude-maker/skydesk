@@ -1,49 +1,52 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>SkyDesk - Remote Desktop Software</title>
-<style>
-    * { box-sizing: border-box; }
-    body {
-        font-family: 'Segoe UI', Arial, sans-serif;
-        background: linear-gradient(135deg, #0f2027, #2c5364 60%, #4facfe);
-        color: white;
-        text-align: center;
-        padding: 60px 20px;
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SkyDesk - Remote Desktop Software</title>
+    <style>
+      * {
+        box-sizing: border-box;
         margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: "Segoe UI", Arial, sans-serif;
+        background: linear-gradient(
+          180deg,
+          #0f2027 0%,
+          #203a58 35%,
+          #2c5364 65%,
+          #4facfe 100%
+        );
+        color: white;
         min-height: 100vh;
-    }
-    .logo {
-        width: 90px;
-        height: 90px;
-        margin: 0 auto 20px;
-        border-radius: 22px;
-        background: linear-gradient(145deg, #4facfe, #1a5fd6);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 40px;
-        font-weight: bold;
-        box-shadow: 0 15px 35px rgba(0,0,0,0.4), inset 0 2px 3px rgba(255,255,255,0.4);
-    }
-    h1 {
-        font-size: 42px;
-        margin: 10px 0 5px;
-        text-shadow: 0 4px 10px rgba(0,0,0,0.3);
-    }
-    .tagline { color: #cfe8ff; margin-bottom: 40px; font-size: 16px; }
-    .box {
-        background: rgba(255,255,255,0.08);
-        backdrop-filter: blur(10px);
-        max-width: 460px;
+        line-height: 1.65;
+      }
+      .hero {
+        max-width: 720px;
         margin: 0 auto;
-        padding: 40px;
+        text-align: center;
+        padding: 80px 24px 20px;
+      }
+      .logo-img {
+        width: 80px;
+        height: 80px;
         border-radius: 20px;
-        border: 1px solid rgba(255,255,255,0.15);
-        box-shadow: 0 20px 50px rgba(0,0,0,0.4);
-    }
-    .btn {
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4);
+        margin-bottom: 20px;
+      }
+      h1 {
+        font-size: 42px;
+        margin-bottom: 8px;
+        text-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+      }
+      .tagline {
+        color: #cfe8ff;
+        font-size: 17px;
+      }
+
+      .btn {
         display: inline-block;
         padding: 16px 40px;
         background: linear-gradient(145deg, #4facfe, #1a5fd6);
@@ -52,44 +55,269 @@
         border-radius: 12px;
         font-weight: bold;
         font-size: 17px;
-        box-shadow: 0 10px 25px rgba(26,95,214,0.5), inset 0 1px 2px rgba(255,255,255,0.4);
+        box-shadow:
+          0 10px 25px rgba(26, 95, 214, 0.5),
+          inset 0 1px 2px rgba(255, 255, 255, 0.4);
         transition: transform 0.15s ease;
-    }
-    .btn:hover { transform: translateY(-3px); }
-    .btn:active { transform: translateY(0); }
-    .meta {
-        margin-top: 20px;
+      }
+      .btn:hover {
+        transform: translateY(-3px);
+      }
+      .meta {
+        margin-top: 16px;
         font-size: 13px;
         color: #b8d4f5;
-    }
-    .features {
-        display: flex;
-        justify-content: center;
-        gap: 30px;
-        margin-top: 40px;
-        flex-wrap: wrap;
-    }
-    .feature {
+      }
+
+      .section {
+        max-width: 780px;
+        margin: 0 auto;
+        padding: 46px 24px;
+      }
+      .section-label {
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        font-size: 12px;
+        color: #7fd0ff;
+        font-weight: bold;
+        margin-bottom: 10px;
+        text-align: center;
+      }
+      .section h2 {
+        font-size: 27px;
+        margin-bottom: 30px;
+        text-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
+        text-align: center;
+      }
+      .section p {
+        color: #dceeff;
+        font-size: 15px;
+        margin-bottom: 14px;
+        max-width: 640px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+      .divider {
+        max-width: 720px;
+        margin: 0 auto;
+        border: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
+      }
+
+      /* Key Highlights - 3D hover cards */
+      .highlights-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+      }
+      .highlight-card {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 16px;
+        padding: 26px 22px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+        transition:
+          transform 0.25s ease,
+          box-shadow 0.25s ease,
+          background 0.25s ease;
+        transform-style: preserve-3d;
+      }
+      .highlight-card:hover {
+        transform: translateY(-8px) rotateX(4deg) rotateY(-4deg);
+        box-shadow: 0 25px 45px rgba(26, 95, 214, 0.4);
+        background: rgba(255, 255, 255, 0.1);
+      }
+      .highlight-card h3 {
+        font-size: 16px;
+        margin-bottom: 8px;
+        color: #ffffff;
+      }
+      .highlight-card p {
         font-size: 13px;
         color: #cfe8ff;
-        opacity: 0.9;
-    }
-</style>
-</head>
-<body>
-    <div class="logo">SD</div>
-    <h1>SkyDesk</h1>
-    <p class="tagline">Fast, secure remote desktop access — anywhere.</p>
+        margin: 0;
+        text-align: left;
+      }
 
-    <div class="box">
-        <a class="btn" href="/downloads/SkyDeskSetup.exe">⬇ Download for Windows</a>
-        <p class="meta">Version 1.0 &middot; Windows 10 / 11 &middot; 25 MB</p>
+      /* How to use */
+      .steps-list {
+        counter-reset: step-counter;
+        list-style: none;
+        margin-top: 6px;
+        max-width: 640px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+      .steps-list li {
+        counter-increment: step-counter;
+        position: relative;
+        padding-left: 46px;
+        margin-bottom: 20px;
+        color: #dceeff;
+        font-size: 15px;
+      }
+      .steps-list li::before {
+        content: counter(step-counter);
+        position: absolute;
+        left: 0;
+        top: -2px;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: linear-gradient(145deg, #4facfe, #1a5fd6);
+        color: white;
+        font-weight: bold;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .steps-list strong {
+        color: white;
+      }
+
+      .cta-bottom {
+        text-align: center;
+        padding: 55px 24px 90px;
+        background: rgba(255, 255, 255, 0.04);
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .cta-bottom h2 {
+        font-size: 26px;
+        margin-bottom: 10px;
+      }
+      .cta-bottom p {
+        color: #cfe8ff;
+        font-size: 14px;
+        margin-bottom: 26px;
+      }
+
+      footer {
+        text-align: center;
+        padding: 28px;
+        font-size: 12px;
+        color: #9fc2e6;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="hero">
+      <img
+        class="logo-img"
+        src="data:image/png;base64,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"
+        alt="SkyDesk logo"
+      />
+      <h1>SkyDesk</h1>
+      <p class="tagline">
+        Fast, secure remote desktop access &mdash; anywhere.
+      </p>
     </div>
 
-    <div class="features">
-        <div class="feature">🔒 Encrypted Connection</div>
-        <div class="feature">🖥️ Full Screen Control</div>
-        <div class="feature">⚡ Real-time Streaming</div>
+    <hr class="divider" />
+
+    <div class="section">
+      <div class="section-label">Key Highlights</div>
+      <h2>Everything at a glance</h2>
+      <div class="highlights-grid">
+        <div class="highlight-card">
+          <h3>Encrypted</h3>
+          <p>
+            Every connection is end-to-end encrypted, so screen data and control
+            input stay private.
+          </p>
+        </div>
+        <div class="highlight-card">
+          <h3>Real-time</h3>
+          <p>
+            Low-latency screen streaming with full mouse and keyboard control.
+          </p>
+        </div>
+        <div class="highlight-card">
+          <h3>Zero setup</h3>
+          <p>
+            No router configuration, port forwarding, or network changes
+            required.
+          </p>
+        </div>
+        <div class="highlight-card">
+          <h3>ID-based</h3>
+          <p>
+            Connect using a simple, unique Remote ID instead of complex network
+            addresses.
+          </p>
+        </div>
+        <div class="highlight-card">
+          <h3>Lightweight</h3>
+          <p>
+            A small, quiet installer that stays out of your way until you need
+            it.
+          </p>
+        </div>
+        <div class="highlight-card">
+          <h3>Simple</h3>
+          <p>
+            Install, sign in, and share your Remote ID &mdash; connected in
+            seconds.
+          </p>
+        </div>
+      </div>
     </div>
-</body>
+
+    <hr class="divider" />
+
+    <div class="section">
+      <div class="section-label">About</div>
+      <h2>What is SkyDesk?</h2>
+      <p>
+        <strong>SkyDesk</strong> is a lightweight remote desktop application
+        that lets you connect to and control another computer over the internet,
+        using nothing more than a unique Remote ID.
+      </p>
+      <p>
+        Whether you're providing tech support to a family member, accessing your
+        work PC from home, or helping a colleague troubleshoot an issue, SkyDesk
+        gives you a live view of the remote screen along with full mouse and
+        keyboard control, all through an encrypted connection.
+      </p>
+      <p>
+        There's nothing to configure on your router or network. Install the app,
+        sign in, share your ID with the person on the other end, and you're
+        connected within seconds.
+      </p>
+    </div>
+
+    <hr class="divider" />
+
+    <div class="section">
+      <div class="section-label">Getting Started</div>
+      <h2>How to use it</h2>
+      <ol class="steps-list">
+        <li>
+          <strong>Install SkyDesk</strong> on your Windows PC using the
+          installer below.
+        </li>
+        <li>
+          <strong>Sign in</strong> with your account to receive your unique
+          Remote ID.
+        </li>
+        <li>
+          <strong>Share your Remote ID</strong> with whoever needs to connect to
+          your computer, or enter theirs to connect to them.
+        </li>
+        <li>
+          <strong>Accept the request</strong> on either end and the session
+          begins immediately, fully encrypted.
+        </li>
+      </ol>
+    </div>
+
+    <div class="cta-bottom">
+      <h2>Ready to get started?</h2>
+      <p>Download SkyDesk and connect in seconds.</p>
+      <a class="btn" href="/downloads/SkyDeskSetup.exe">Download for Windows</a>
+      <p class="meta">Version 1.0 &middot; Windows 10 / 11 &middot; 25 MB</p>
+    </div>
+
+    <footer>&copy; 2026 SkyDesk by Sky Financia. All rights reserved.</footer>
+  </body>
 </html>
