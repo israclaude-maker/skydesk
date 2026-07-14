@@ -21,5 +21,5 @@ from django.views.generic import TemplateView
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),
-    path('download/', TemplateView.as_view(template_name='download.html'), name='download'),
+    path('', TemplateView.as_view(template_name='download.html'), name='download'),
 ]

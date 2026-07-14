@@ -1,54 +1,95 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Download SkyDesk</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        background: linear-gradient(135deg, #4facfe, #1a5fd6);
+<head>
+<meta charset="UTF-8">
+<title>SkyDesk - Remote Desktop Software</title>
+<style>
+    * { box-sizing: border-box; }
+    body {
+        font-family: 'Segoe UI', Arial, sans-serif;
+        background: linear-gradient(135deg, #0f2027, #2c5364 60%, #4facfe);
         color: white;
         text-align: center;
-        padding: 80px 20px;
+        padding: 60px 20px;
         margin: 0;
-      }
-      .box {
-        background: white;
-        color: #333;
-        max-width: 420px;
+        min-height: 100vh;
+    }
+    .logo {
+        width: 90px;
+        height: 90px;
+        margin: 0 auto 20px;
+        border-radius: 22px;
+        background: linear-gradient(145deg, #4facfe, #1a5fd6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 40px;
+        font-weight: bold;
+        box-shadow: 0 15px 35px rgba(0,0,0,0.4), inset 0 2px 3px rgba(255,255,255,0.4);
+    }
+    h1 {
+        font-size: 42px;
+        margin: 10px 0 5px;
+        text-shadow: 0 4px 10px rgba(0,0,0,0.3);
+    }
+    .tagline { color: #cfe8ff; margin-bottom: 40px; font-size: 16px; }
+    .box {
+        background: rgba(255,255,255,0.08);
+        backdrop-filter: blur(10px);
+        max-width: 460px;
         margin: 0 auto;
         padding: 40px;
-        border-radius: 16px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-      }
-      h1 {
-        color: #1a5fd6;
-        margin-bottom: 5px;
-      }
-      p {
-        color: #666;
-      }
-      .btn {
+        border-radius: 20px;
+        border: 1px solid rgba(255,255,255,0.15);
+        box-shadow: 0 20px 50px rgba(0,0,0,0.4);
+    }
+    .btn {
         display: inline-block;
-        margin-top: 20px;
-        padding: 14px 32px;
-        background: #1a5fd6;
+        padding: 16px 40px;
+        background: linear-gradient(145deg, #4facfe, #1a5fd6);
         color: white;
         text-decoration: none;
-        border-radius: 8px;
+        border-radius: 12px;
         font-weight: bold;
-        font-size: 16px;
-      }
-    </style>
-  </head>
-  <body>
+        font-size: 17px;
+        box-shadow: 0 10px 25px rgba(26,95,214,0.5), inset 0 1px 2px rgba(255,255,255,0.4);
+        transition: transform 0.15s ease;
+    }
+    .btn:hover { transform: translateY(-3px); }
+    .btn:active { transform: translateY(0); }
+    .meta {
+        margin-top: 20px;
+        font-size: 13px;
+        color: #b8d4f5;
+    }
+    .features {
+        display: flex;
+        justify-content: center;
+        gap: 30px;
+        margin-top: 40px;
+        flex-wrap: wrap;
+    }
+    .feature {
+        font-size: 13px;
+        color: #cfe8ff;
+        opacity: 0.9;
+    }
+</style>
+</head>
+<body>
+    <div class="logo">SD</div>
+    <h1>SkyDesk</h1>
+    <p class="tagline">Fast, secure remote desktop access — anywhere.</p>
+
     <div class="box">
-      <h1>SkyDesk</h1>
-      <p>Remote Desktop Software for Windows</p>
-      <a class="btn" href="/downloads/SkyDeskSetup.exe">Download for Windows</a>
-      <p style="margin-top: 20px; font-size: 13px">
-        Version 1.0 &middot; Windows 10/11
-      </p>
+        <a class="btn" href="/downloads/SkyDeskSetup.exe">⬇ Download for Windows</a>
+        <p class="meta">Version 1.0 &middot; Windows 10 / 11 &middot; 25 MB</p>
     </div>
-  </body>
+
+    <div class="features">
+        <div class="feature">🔒 Encrypted Connection</div>
+        <div class="feature">🖥️ Full Screen Control</div>
+        <div class="feature">⚡ Real-time Streaming</div>
+    </div>
+</body>
 </html>
