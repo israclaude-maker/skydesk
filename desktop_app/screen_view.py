@@ -1,10 +1,12 @@
 import socket
 import struct
 import threading
+import time
 import json
 from io import BytesIO
 from PIL import Image, ImageTk
 import tkinter as tk
+from tkinter import messagebox
 
 
 class ScreenViewer:
@@ -29,6 +31,9 @@ class ScreenViewer:
         "end": "end",
     }
 
+    CONNECT_RETRIES = 15
+    CONNECT_RETRY_DELAY = 1  # seconds
+
     def __init__(self, host, screen_port=9001, control_port=9002, my_username="User"):
         self.host = host
         self.screen_port = screen_port
@@ -38,12 +43,19 @@ class ScreenViewer:
         self.window = None
         self.label = None
         self.control_sock = None
+        self.got_first_frame = False
 
     def start(self):
         self.window = tk.Toplevel()
         self.window.title("SkyDesk - Remote Screen")
-        self.label = tk.Label(self.window)
-        self.label.pack()
+        self.window.geometry("1000x650")
+        self.window.minsize(400, 300)
+
+        self.label = tk.Label(
+            self.window, text="Connecting to remote screen...",
+            font=("Segoe UI", 12), bg="#222", fg="white"
+        )
+        self.label.pack(fill="both", expand=True)
 
         self.label.bind("<Motion>", self._on_mouse_move)
         self.label.bind("<Button-1>", lambda e: self._on_click(e, "left"))
@@ -51,6 +63,7 @@ class ScreenViewer:
         self.label.bind("<MouseWheel>", self._on_scroll)
         self.window.bind("<Key>", self._on_key)
         self.label.focus_set()
+        self.window.protocol("WM_DELETE_WINDOW", self.stop)
 
         self.running = True
         threading.Thread(target=self._connect_screen_stream, daemon=True).start()
@@ -58,10 +71,12 @@ class ScreenViewer:
 
     # ---------- SCREEN RECEIVING ----------
     def _connect_screen_stream(self):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((self.host, self.screen_port))
-        print("Connected to sharer (screen)!")
+        sock = self._connect_with_retry(self.screen_port)
+        if sock is None:
+            self.window.after(0, self._connection_failed)
+            return
 
+        print("Connected to sharer (screen)!")
         data = b""
         payload_size = struct.calcsize(">L")
 
@@ -78,7 +93,10 @@ class ScreenViewer:
                 msg_size = struct.unpack(">L", packed_size)[0]
 
                 while len(data) < msg_size:
-                    data += sock.recv(4096)
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        return
+                    data += chunk
 
                 frame_data = data[:msg_size]
                 data = data[msg_size:]
@@ -87,19 +105,50 @@ class ScreenViewer:
                 photo = ImageTk.PhotoImage(img)
 
                 self.window.after(0, self._update_image, photo)
-        except (ConnectionResetError, BrokenPipeError):
+        except (ConnectionResetError, BrokenPipeError, OSError):
             print("Sharer disconnected")
         finally:
             sock.close()
 
+    def _connect_with_retry(self, port):
+        """Sharer ka socket thoda late ban sakta hai, isliye kuch der retry karo."""
+        for attempt in range(self.CONNECT_RETRIES):
+            if not self.running and attempt > 0:
+                return None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                sock.connect((self.host, port))
+                sock.settimeout(None)
+                return sock
+            except (ConnectionRefusedError, OSError, socket.timeout):
+                time.sleep(self.CONNECT_RETRY_DELAY)
+        return None
+
+    def _connection_failed(self):
+        if self.label:
+            self.label.config(text="Connect nahi ho saka. Sharer offline ya firewall block kar raha hai.")
+        messagebox.showerror(
+            "Connection Failed",
+            "Remote screen se connect nahi ho paya.\n\n"
+            "Check karo:\n"
+            "- Doosra user abhi bhi online hai\n"
+            "- Agar alag network pe hain, sharer ke router pe ports 9001/9002 forward hain"
+        )
+
     def _update_image(self, photo):
-        self.label.config(image=photo)
+        if not self.got_first_frame:
+            self.got_first_frame = True
+            self.window.state("zoomed")  # pehla frame aate hi maximize karo
+        self.label.config(image=photo, text="")
         self.label.image = photo
 
     # ---------- CONTROL SENDING ----------
     def _connect_control(self):
-        self.control_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.control_sock.connect((self.host, self.control_port))
+        sock = self._connect_with_retry(self.control_port)
+        if sock is None:
+            return
+        self.control_sock = sock
         print("Connected to sharer (control)!")
 
         # Apna naam bhejo taake sharer ki screen par badge dikhe
@@ -135,3 +184,5 @@ class ScreenViewer:
         self.running = False
         if self.control_sock:
             self.control_sock.close()
+        if self.window:
+            self.window.destroy()
