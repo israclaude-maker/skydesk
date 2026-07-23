@@ -44,6 +44,8 @@ class ScreenViewer:
         self.label = None
         self.control_sock = None
         self.got_first_frame = False
+        self.win_width = 1000
+        self.win_height = 650
 
     def start(self):
         self.window = tk.Toplevel()
@@ -62,8 +64,16 @@ class ScreenViewer:
         self.label.bind("<Button-3>", lambda e: self._on_click(e, "right"))
         self.label.bind("<MouseWheel>", self._on_scroll)
         self.window.bind("<Key>", self._on_key)
+        self.window.bind("<Configure>", self._on_resize)
         self.label.focus_set()
         self.window.protocol("WM_DELETE_WINDOW", self.stop)
+
+        # Turant maximize karo, kisi frame ka wait mat karo
+        self.window.update_idletasks()
+        self.window.state("zoomed")
+        self.window.update_idletasks()
+        self.win_width = self.window.winfo_width()
+        self.win_height = self.window.winfo_height()
 
         self.running = True
         threading.Thread(target=self._connect_screen_stream, daemon=True).start()
@@ -102,9 +112,7 @@ class ScreenViewer:
                 data = data[msg_size:]
 
                 img = Image.open(BytesIO(frame_data))
-                photo = ImageTk.PhotoImage(img)
-
-                self.window.after(0, self._update_image, photo)
+                self.window.after(0, self._update_image, img)
         except (ConnectionResetError, BrokenPipeError, OSError):
             print("Sharer disconnected")
         finally:
@@ -136,10 +144,19 @@ class ScreenViewer:
             "- Agar alag network pe hain, sharer ke router pe ports 9001/9002 forward hain"
         )
 
-    def _update_image(self, photo):
-        if not self.got_first_frame:
-            self.got_first_frame = True
-            self.window.state("zoomed")  # pehla frame aate hi maximize karo
+    def _on_resize(self, event):
+        if event.widget is self.window:
+            self.win_width = event.width
+            self.win_height = event.height
+
+    def _update_image(self, img):
+        self.got_first_frame = True
+        # Remote screen ko window ke poore size mein fit karo, chahe resolution alag ho
+        w = max(self.win_width, 100)
+        h = max(self.win_height, 100)
+        if img.size != (w, h):
+            img = img.resize((w, h), Image.BILINEAR)
+        photo = ImageTk.PhotoImage(img)
         self.label.config(image=photo, text="")
         self.label.image = photo
 
