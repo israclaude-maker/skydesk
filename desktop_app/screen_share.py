@@ -8,6 +8,7 @@ from PIL import Image
 import struct
 import pyautogui
 import tkinter as tk
+from debug_log import log
 
 pyautogui.FAILSAFE = False
 
@@ -67,20 +68,29 @@ class ScreenSharer:
         self.overlay = None
 
     def start(self):
+        log("ScreenSharer.start() called - launching screen + control servers")
         self.running = True
         threading.Thread(target=self._run_screen_server, daemon=True).start()
         threading.Thread(target=self._run_control_server, daemon=True).start()
 
     # ---------- SCREEN STREAMING ----------
     def _run_screen_server(self):
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind(("0.0.0.0", self.screen_port))
-        server_socket.listen(1)
-        print(f"Screen sharing server listening on port {self.screen_port}")
+        try:
+            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_socket.bind(("0.0.0.0", self.screen_port))
+            server_socket.listen(1)
+            log(f"Screen sharing server listening on port {self.screen_port}")
+        except OSError as e:
+            log(f"FAILED to bind screen server on port {self.screen_port}: {e}")
+            return
 
-        conn, addr = server_socket.accept()
-        print(f"Viewer connected from {addr}")
+        try:
+            conn, addr = server_socket.accept()
+            log(f"Viewer connected from {addr}")
+        except OSError as e:
+            log(f"FAILED to accept viewer connection: {e}")
+            return
 
         try:
             with mss.mss() as sct:
@@ -97,21 +107,31 @@ class ScreenSharer:
                     conn.sendall(size + data)
 
                     time.sleep(1 / 15)
-        except (ConnectionResetError, BrokenPipeError):
-            print("Viewer disconnected")
+        except (ConnectionResetError, BrokenPipeError) as e:
+            log(f"Viewer disconnected: {e}")
+        except Exception as e:
+            log(f"Screen capture/send error: {e}")
         finally:
             conn.close()
 
     # ---------- CONTROL RECEIVING ----------
     def _run_control_server(self):
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind(("0.0.0.0", self.control_port))
-        server_socket.listen(1)
-        print(f"Control server listening on port {self.control_port}")
+        try:
+            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_socket.bind(("0.0.0.0", self.control_port))
+            server_socket.listen(1)
+            log(f"Control server listening on port {self.control_port}")
+        except OSError as e:
+            log(f"FAILED to bind control server on port {self.control_port}: {e}")
+            return
 
-        conn, addr = server_socket.accept()
-        print(f"Controller connected from {addr}")
+        try:
+            conn, addr = server_socket.accept()
+            log(f"Controller connected from {addr}")
+        except OSError as e:
+            log(f"FAILED to accept controller connection: {e}")
+            return
 
         buffer = ""
         try:

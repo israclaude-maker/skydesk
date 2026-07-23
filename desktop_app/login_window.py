@@ -19,8 +19,7 @@ class LoginWindow:
         self.root = root
         self.root.title("SkyDesk - Login")
         self.root.configure(bg="#eef1f8")
-        self.root.resizable(False, False)
-        center_window(self.root, 420, 540)
+        self.root.state("zoomed")
 
         card = tk.Frame(self.root, bg="white", highlightbackground="#dfe3ec", highlightthickness=1)
         card.place(relx=0.5, rely=0.5, anchor="center", width=360, height=480)

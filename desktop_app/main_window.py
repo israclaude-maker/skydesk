@@ -10,8 +10,7 @@ class MainWindow:
         self.user_data = user_data
 
         self.root.title("SkyDesk - Dashboard")
-        self.root.geometry("400x400")
-        self.root.resizable(False, False)
+        self.root.state("zoomed")
 
         # Title
         tk.Label(root, text="SkyDesk", font=("Arial", 20, "bold")).pack(pady=15)

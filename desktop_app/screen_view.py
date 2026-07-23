@@ -7,6 +7,7 @@ from io import BytesIO
 from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import messagebox
+from debug_log import log
 
 
 class ScreenViewer:
@@ -48,6 +49,7 @@ class ScreenViewer:
         self.win_height = 650
 
     def start(self):
+        log(f"ScreenViewer starting, target host={self.host}, screen_port={self.screen_port}, control_port={self.control_port}")
         self.window = tk.Toplevel()
         self.window.title("SkyDesk - Remote Screen")
         self.window.geometry("1000x650")
@@ -120,6 +122,7 @@ class ScreenViewer:
 
     def _connect_with_retry(self, port):
         """Sharer ka socket thoda late ban sakta hai, isliye kuch der retry karo."""
+        last_error = None
         for attempt in range(self.CONNECT_RETRIES):
             if not self.running and attempt > 0:
                 return None
@@ -128,9 +131,13 @@ class ScreenViewer:
                 sock.settimeout(5)
                 sock.connect((self.host, port))
                 sock.settimeout(None)
+                log(f"Connected successfully to {self.host}:{port} on attempt {attempt + 1}")
                 return sock
-            except (ConnectionRefusedError, OSError, socket.timeout):
+            except (ConnectionRefusedError, OSError, socket.timeout) as e:
+                last_error = e
+                log(f"Attempt {attempt + 1}/{self.CONNECT_RETRIES} to {self.host}:{port} failed: {e}")
                 time.sleep(self.CONNECT_RETRY_DELAY)
+        log(f"Giving up connecting to {self.host}:{port} after {self.CONNECT_RETRIES} attempts. Last error: {last_error}")
         return None
 
     def _connection_failed(self):
