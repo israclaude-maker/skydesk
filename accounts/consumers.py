@@ -65,11 +65,15 @@ class PresenceConsumer(AsyncWebsocketConsumer):
         requester_remote_id = data.get("requester_remote_id")
 
         session_id = None
+        sharer_ip = None
         if accepted:
             import uuid
             session_id = str(uuid.uuid4())[:8]
+            # Sharer (jo abhi accept kar raha hai) ka IP nikaalo
+            client = self.scope.get("client")
+            sharer_ip = client[0] if client else None
 
-        # Requester ko batao
+        # Requester ko batao (uske sath sharer ka IP bhi bhejo)
         await self.channel_layer.group_send(
             f"user_{requester_remote_id}",
             {
@@ -78,7 +82,8 @@ class PresenceConsumer(AsyncWebsocketConsumer):
                     "type": "id_connect_accept" if accepted else "id_connect_reject",
                     "from_remote_id": self.user.remote_id,
                     "session_id": session_id,
-                    "role": "viewer"  # requester screen dekhega
+                    "role": "viewer",  # requester screen dekhega
+                    "host": sharer_ip
                 }
             }
         )

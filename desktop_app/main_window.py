@@ -114,7 +114,7 @@ class MainWindow:
             from screen_view import ScreenViewer
 
             viewer = ScreenViewer(
-                host="127.0.0.1", screen_port=9001, control_port=9002,
+                host=data.get("host", "127.0.0.1"), screen_port=9001, control_port=9002,
                 my_username=self.user_data["username"]
             )
             viewer.start()
