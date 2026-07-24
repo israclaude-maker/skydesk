@@ -1,22 +1,29 @@
 import os
 import datetime
+import tempfile
 
-LOG_DIR = "C:\\SkyDeskLogs"
-LOG_PATH = os.path.join(LOG_DIR, "skydesk_debug.log")
+# Desktop kabhi OneDrive se redirect hota hai jahan likhna fail ho sakta hai,
+# isliye har cheez %TEMP% mein likh do -- ye hamesha exist karta hai, bina admin ke.
+LOG_PATH = os.path.join(os.environ.get("TEMP", tempfile.gettempdir()), "skydesk_debug.log")
+
+# Har baar app start hone par ek marker line likho, taake pata chale file kaam kar rahi hai.
+try:
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(f"\n===== SkyDesk started, logging to: {LOG_PATH} =====\n")
+except Exception as e:
+    # Agar TEMP bhi fail ho jaye (bahut rare), fallback C:\ pe try karo
+    try:
+        LOG_PATH = "C:\\skydesk_debug.log"
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"\n===== SkyDesk started (fallback path) =====\n")
+    except Exception:
+        pass
 
 
 def log(message):
-    """Console nahi dikhta .exe mein, isliye har cheez is fixed file mein likh do."""
-    print(message)  # agar source se python se run ho raha hai to terminal mein bhi dikhe
+    """Console nahi dikhta .exe mein, isliye har cheez is file mein likh do."""
     try:
-        os.makedirs(LOG_DIR, exist_ok=True)
         with open(LOG_PATH, "a", encoding="utf-8") as f:
             f.write(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}\n")
-    except Exception as e:
-        # Agar ye bhi fail ho to kam se kam ye pata chale kyun
-        try:
-            with open(os.path.join(os.environ.get("TEMP", "C:\\"), "skydesk_debug_fallback.log"), "a", encoding="utf-8") as f2:
-                f2.write(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] LOG FAILED: {e} -- original message: {message}\n")
-        except Exception:
-            pass
-        
+    except Exception:
+        pass
