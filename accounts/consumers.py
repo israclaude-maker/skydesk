@@ -7,6 +7,20 @@ User = get_user_model()
 
 
 class PresenceConsumer(AsyncWebsocketConsumer):
+    def _get_real_client_ip(self):
+        """
+        Nginx Daphne ke aage proxy karta hai, isliye scope['client'] hamesha
+        127.0.0.1 dega. Real IP X-Forwarded-For header se nikalo (nginx
+        set karta hai, agar config mein add kiya ho).
+        """
+        headers = dict(self.scope.get("headers", []))
+        forwarded = headers.get(b"x-forwarded-for")
+        if forwarded:
+            # Pehla IP asli client ka hota hai (comma-separated list ho sakti hai)
+            return forwarded.decode().split(",")[0].strip()
+        client = self.scope.get("client")
+        return client[0] if client else None
+
     async def connect(self):
         self.user = self.scope["user"]
 
@@ -69,9 +83,8 @@ class PresenceConsumer(AsyncWebsocketConsumer):
         if accepted:
             import uuid
             session_id = str(uuid.uuid4())[:8]
-            # Sharer (jo abhi accept kar raha hai) ka IP nikaalo
-            client = self.scope.get("client")
-            sharer_ip = client[0] if client else None
+            # Sharer (jo abhi accept kar raha hai) ka real IP nikaalo
+            sharer_ip = self._get_real_client_ip()
 
         # Requester ko batao (uske sath sharer ka IP bhi bhejo)
         await self.channel_layer.group_send(
