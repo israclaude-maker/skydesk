@@ -56,10 +56,11 @@ class PresenceConsumer(AsyncWebsocketConsumer):
 
         target_exists = await self.check_user_exists(target_remote_id)
         if not target_exists:
-            await self.send(text_data=json.dumps({
-                "type": "error",
-                "message": "Remote ID not found"
-            }))
+            await self.send(
+                text_data=json.dumps(
+                    {"type": "error", "message": "Remote ID not found"}
+                )
+            )
             return
 
         # Target user ke group ko request bhejo
@@ -71,8 +72,8 @@ class PresenceConsumer(AsyncWebsocketConsumer):
                     "type": "id_connect_request",
                     "from_remote_id": self.user.remote_id,
                     "from_username": self.user.username,
-                }
-            }
+                },
+            },
         )
 
     async def handle_connect_response(self, data, accepted):
@@ -82,9 +83,11 @@ class PresenceConsumer(AsyncWebsocketConsumer):
         sharer_ip = None
         if accepted:
             import uuid
+
             session_id = str(uuid.uuid4())[:8]
-            # Sharer (jo abhi accept kar raha hai) ka real IP nikaalo
+            # Sharer (jo abhi accept kar raha hai) ka public IP nikaalo
             sharer_ip = self._get_real_client_ip()
+            local_ip = data.get("local_ip")
 
         # Requester ko batao (uske sath sharer ka IP bhi bhejo)
         await self.channel_layer.group_send(
@@ -96,18 +99,23 @@ class PresenceConsumer(AsyncWebsocketConsumer):
                     "from_remote_id": self.user.remote_id,
                     "session_id": session_id,
                     "role": "viewer",  # requester screen dekhega
-                    "host": sharer_ip
-                }
-            }
+                    "host": sharer_ip,
+                    "local_host": local_ip,
+                },
+            },
         )
 
         # Accept karne wale (sharer) ko bhi bhejo
         if accepted:
-            await self.send(text_data=json.dumps({
-                "type": "session_start",
-                "session_id": session_id,
-                "role": "sharer"  # ye apni screen share karega
-            }))
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "type": "session_start",
+                        "session_id": session_id,
+                        "role": "sharer",  # ye apni screen share karega
+                    }
+                )
+            )
 
     async def forward_message(self, event):
         await self.send(text_data=json.dumps(event["message"]))

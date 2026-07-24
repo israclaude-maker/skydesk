@@ -112,8 +112,11 @@ class MainWindow:
             )
             from screen_view import ScreenViewer
 
+            candidate_hosts = [h for h in [data.get("local_host"), data.get("host")] if h]
+            if not candidate_hosts:
+                candidate_hosts = ["127.0.0.1"]
             viewer = ScreenViewer(
-                host=data.get("host", "127.0.0.1"), screen_port=9001, control_port=9002,
+                hosts=candidate_hosts, screen_port=9001, control_port=9002,
                 my_username=self.user_data["username"]
             )
             viewer.start()

@@ -1,7 +1,20 @@
 import websocket
 import json
+import socket
 import threading
 from config import WS_PRESENCE_URL
+
+
+def get_local_ip():
+    """Apna LAN IP nikalo (agar sharer/viewer same network pe hon toh ye tez chalega)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return None
 
 
 class WSClient:
@@ -56,6 +69,7 @@ class WSClient:
         message = {
             "type": "id_connect_accept",
             "requester_remote_id": requester_remote_id,
+            "local_ip": get_local_ip(),
         }
         if self.ws:
             self.ws.send(json.dumps(message))

@@ -35,8 +35,10 @@ class ScreenViewer:
     CONNECT_RETRIES = 15
     CONNECT_RETRY_DELAY = 1  # seconds
 
-    def __init__(self, host, screen_port=9001, control_port=9002, my_username="User"):
-        self.host = host
+    def __init__(self, hosts, screen_port=9001, control_port=9002, my_username="User"):
+        # hosts ek list hai (jaise [local_ip, public_ip]) -- jo bhi pehle connect ho jaye wahi use hoga
+        self.hosts = hosts if isinstance(hosts, list) else [hosts]
+        self.connected_host = None
         self.screen_port = screen_port
         self.control_port = control_port
         self.my_username = my_username
@@ -49,7 +51,7 @@ class ScreenViewer:
         self.win_height = 650
 
     def start(self):
-        log(f"ScreenViewer starting, target host={self.host}, screen_port={self.screen_port}, control_port={self.control_port}")
+        log(f"ScreenViewer starting, candidate hosts={self.hosts}, screen_port={self.screen_port}, control_port={self.control_port}")
         self.window = tk.Toplevel()
         self.window.title("SkyDesk - Remote Screen")
         self.window.geometry("1000x650")
@@ -121,23 +123,30 @@ class ScreenViewer:
             sock.close()
 
     def _connect_with_retry(self, port):
-        """Sharer ka socket thoda late ban sakta hai, isliye kuch der retry karo."""
+        """Har host try karo (local IP tez hoga agar same network pe ho), kuch der retry karo."""
+        # Agar pehle se ek host kaam kar chuka hai (dusre socket ke liye), usi ko pehle try karo
+        hosts_to_try = self.hosts
+        if self.connected_host and self.connected_host in self.hosts:
+            hosts_to_try = [self.connected_host] + [h for h in self.hosts if h != self.connected_host]
+
         last_error = None
         for attempt in range(self.CONNECT_RETRIES):
             if not self.running and attempt > 0:
                 return None
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                sock.connect((self.host, port))
-                sock.settimeout(None)
-                log(f"Connected successfully to {self.host}:{port} on attempt {attempt + 1}")
-                return sock
-            except (ConnectionRefusedError, OSError, socket.timeout) as e:
-                last_error = e
-                log(f"Attempt {attempt + 1}/{self.CONNECT_RETRIES} to {self.host}:{port} failed: {e}")
-                time.sleep(self.CONNECT_RETRY_DELAY)
-        log(f"Giving up connecting to {self.host}:{port} after {self.CONNECT_RETRIES} attempts. Last error: {last_error}")
+            for h in hosts_to_try:
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(2)
+                    sock.connect((h, port))
+                    sock.settimeout(None)
+                    self.connected_host = h
+                    log(f"Connected successfully to {h}:{port} on attempt {attempt + 1}")
+                    return sock
+                except (ConnectionRefusedError, OSError, socket.timeout) as e:
+                    last_error = e
+                    log(f"Attempt {attempt + 1}/{self.CONNECT_RETRIES} to {h}:{port} failed: {e}")
+            time.sleep(self.CONNECT_RETRY_DELAY)
+        log(f"Giving up connecting to {hosts_to_try}:{port} after {self.CONNECT_RETRIES} attempts. Last error: {last_error}")
         return None
 
     def _connection_failed(self):
