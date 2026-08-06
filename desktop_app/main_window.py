@@ -112,11 +112,8 @@ class MainWindow:
             )
             from screen_view import ScreenViewer
 
-            candidate_hosts = [h for h in [data.get("local_host"), data.get("host")] if h]
-            if not candidate_hosts:
-                candidate_hosts = ["127.0.0.1"]
             viewer = ScreenViewer(
-                hosts=candidate_hosts, screen_port=9001, control_port=9002,
+                session_id=session_id,
                 my_username=self.user_data["username"]
             )
             viewer.start()
@@ -128,7 +125,11 @@ class MainWindow:
         elif msg_type == "session_start":
             from screen_share import ScreenSharer
 
-            sharer = ScreenSharer(main_root=self.root, screen_port=9001, control_port=9002)
+            session_id = data.get("session_id")
+            sharer = ScreenSharer(
+                main_root=self.root, session_id=session_id,
+                username=self.user_data["username"]
+            )
             sharer.start()
             messagebox.showinfo("Sharing Started", "Your screen is now being shared!")
 
