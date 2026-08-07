@@ -9,6 +9,9 @@ import tkinter as tk
 from tkinter import messagebox
 from debug_log import log
 
+RELAY_HOST = "76.13.219.77"
+RELAY_PORT = 9010
+
 
 class ScreenViewer:
     KEY_MAP = {
@@ -33,46 +36,50 @@ class ScreenViewer:
     }
 
     CONNECT_RETRIES = 15
-    CONNECT_RETRY_DELAY = 1  # seconds
+    CONNECT_RETRY_DELAY = 1
 
-    def __init__(self, hosts, screen_port=9001, control_port=9002, my_username="User"):
-        # hosts ek list hai (jaise [local_ip, public_ip]) -- jo bhi pehle connect ho jaye wahi use hoga
-        self.hosts = hosts if isinstance(hosts, list) else [hosts]
-        self.connected_host = None
-        self.screen_port = screen_port
-        self.control_port = control_port
+    def __init__(self, session_id, my_username="User"):
+        self.session_id = session_id
         self.my_username = my_username
         self.running = False
         self.window = None
-        self.label = None
+        self.canvas = None
+        self.canvas_image_id = None
+        self.status_text_id = None
+        self.host_cursor_id = None
+        self.host_cursor_label_id = None
         self.control_sock = None
         self.got_first_frame = False
         self.win_width = 1000
         self.win_height = 650
+        self.remote_width = None
+        self.remote_height = None
+        self._photo_ref = None
 
     def start(self):
-        log(f"ScreenViewer starting, candidate hosts={self.hosts}, screen_port={self.screen_port}, control_port={self.control_port}")
+        log(f"ScreenViewer starting for session={self.session_id} via relay {RELAY_HOST}:{RELAY_PORT}")
         self.window = tk.Toplevel()
         self.window.title("SkyDesk - Remote Screen")
         self.window.geometry("1000x650")
         self.window.minsize(400, 300)
 
-        self.label = tk.Label(
-            self.window, text="Connecting to remote screen...",
-            font=("Segoe UI", 12), bg="#222", fg="white"
+        self.canvas = tk.Canvas(self.window, bg="#222", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas_image_id = self.canvas.create_image(0, 0, anchor="nw")
+        self.status_text_id = self.canvas.create_text(
+            10, 10, anchor="nw", text="Connecting to remote screen...",
+            fill="white", font=("Segoe UI", 12)
         )
-        self.label.pack(fill="both", expand=True)
 
-        self.label.bind("<Motion>", self._on_mouse_move)
-        self.label.bind("<Button-1>", lambda e: self._on_click(e, "left"))
-        self.label.bind("<Button-3>", lambda e: self._on_click(e, "right"))
-        self.label.bind("<MouseWheel>", self._on_scroll)
+        self.canvas.bind("<Motion>", self._on_mouse_move)
+        self.canvas.bind("<Button-1>", lambda e: self._on_click(e, "left"))
+        self.canvas.bind("<Button-3>", lambda e: self._on_click(e, "right"))
+        self.canvas.bind("<MouseWheel>", self._on_scroll)
         self.window.bind("<Key>", self._on_key)
         self.window.bind("<Configure>", self._on_resize)
-        self.label.focus_set()
+        self.canvas.focus_set()
         self.window.protocol("WM_DELETE_WINDOW", self.stop)
 
-        # Turant maximize karo, kisi frame ka wait mat karo
         self.window.update_idletasks()
         self.window.state("zoomed")
         self.window.update_idletasks()
@@ -83,14 +90,38 @@ class ScreenViewer:
         threading.Thread(target=self._connect_screen_stream, daemon=True).start()
         threading.Thread(target=self._connect_control, daemon=True).start()
 
-    # ---------- SCREEN RECEIVING ----------
+    def _connect_relay(self, channel):
+        last_error = None
+        for attempt in range(self.CONNECT_RETRIES):
+            if not self.running and attempt > 0:
+                return None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                sock.connect((RELAY_HOST, RELAY_PORT))
+                sock.settimeout(None)
+                handshake = json.dumps({
+                    "session_id": self.session_id,
+                    "channel": channel,
+                    "role": "viewer",
+                }) + "\n"
+                sock.sendall(handshake.encode())
+                log(f"Connected to relay for channel={channel}")
+                return sock
+            except (ConnectionRefusedError, OSError, socket.timeout) as e:
+                last_error = e
+                log(f"Relay connect attempt {attempt + 1}/{self.CONNECT_RETRIES} for {channel} failed: {e}")
+            time.sleep(self.CONNECT_RETRY_DELAY)
+        log(f"Giving up connecting to relay for channel={channel}. Last error: {last_error}")
+        return None
+
     def _connect_screen_stream(self):
-        sock = self._connect_with_retry(self.screen_port)
+        sock = self._connect_relay("screen")
         if sock is None:
             self.window.after(0, self._connection_failed)
             return
 
-        print("Connected to sharer (screen)!")
+        log("Connected to sharer (screen) via relay!")
         data = b""
         payload_size = struct.calcsize(">L")
 
@@ -116,48 +147,29 @@ class ScreenViewer:
                 data = data[msg_size:]
 
                 img = Image.open(BytesIO(frame_data))
+
+                if self.remote_width is None:
+                    self.remote_width, self.remote_height = img.size
+                    log(f"Remote resolution detected from frame: {self.remote_width}x{self.remote_height}")
+
                 self.window.after(0, self._update_image, img)
         except (ConnectionResetError, BrokenPipeError, OSError):
-            print("Sharer disconnected")
+            log("Sharer disconnected")
         finally:
             sock.close()
 
-    def _connect_with_retry(self, port):
-        """Har host try karo (local IP tez hoga agar same network pe ho), kuch der retry karo."""
-        # Agar pehle se ek host kaam kar chuka hai (dusre socket ke liye), usi ko pehle try karo
-        hosts_to_try = self.hosts
-        if self.connected_host and self.connected_host in self.hosts:
-            hosts_to_try = [self.connected_host] + [h for h in self.hosts if h != self.connected_host]
-
-        last_error = None
-        for attempt in range(self.CONNECT_RETRIES):
-            if not self.running and attempt > 0:
-                return None
-            for h in hosts_to_try:
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(2)
-                    sock.connect((h, port))
-                    sock.settimeout(None)
-                    self.connected_host = h
-                    log(f"Connected successfully to {h}:{port} on attempt {attempt + 1}")
-                    return sock
-                except (ConnectionRefusedError, OSError, socket.timeout) as e:
-                    last_error = e
-                    log(f"Attempt {attempt + 1}/{self.CONNECT_RETRIES} to {h}:{port} failed: {e}")
-            time.sleep(self.CONNECT_RETRY_DELAY)
-        log(f"Giving up connecting to {hosts_to_try}:{port} after {self.CONNECT_RETRIES} attempts. Last error: {last_error}")
-        return None
-
     def _connection_failed(self):
-        if self.label:
-            self.label.config(text="Connect nahi ho saka. Sharer offline ya firewall block kar raha hai.")
+        if self.canvas and self.status_text_id:
+            self.canvas.itemconfig(
+                self.status_text_id,
+                text="Connect nahi ho saka. Sharer offline ho sakta hai ya VPS relay down hai."
+            )
         messagebox.showerror(
             "Connection Failed",
             "Remote screen se connect nahi ho paya.\n\n"
             "Check karo:\n"
             "- Doosra user abhi bhi online hai\n"
-            "- Agar alag network pe hain, sharer ke router pe ports 9001/9002 forward hain"
+            "- Internet connection theek hai"
         )
 
     def _on_resize(self, event):
@@ -167,25 +179,82 @@ class ScreenViewer:
 
     def _update_image(self, img):
         self.got_first_frame = True
-        # Remote screen ko window ke poore size mein fit karo, chahe resolution alag ho
         w = max(self.win_width, 100)
         h = max(self.win_height, 100)
         if img.size != (w, h):
             img = img.resize((w, h), Image.BILINEAR)
-        photo = ImageTk.PhotoImage(img)
-        self.label.config(image=photo, text="")
-        self.label.image = photo
+        self._photo_ref = ImageTk.PhotoImage(img)
+        self.canvas.itemconfig(self.canvas_image_id, image=self._photo_ref)
+        if self.status_text_id:
+            self.canvas.itemconfig(self.status_text_id, text="")
+        if self.host_cursor_id is not None:
+            self.canvas.tag_raise(self.host_cursor_id)
+            self.canvas.tag_raise(self.host_cursor_label_id)
 
-    # ---------- CONTROL SENDING ----------
     def _connect_control(self):
-        sock = self._connect_with_retry(self.control_port)
+        sock = self._connect_relay("control")
         if sock is None:
             return
         self.control_sock = sock
-        print("Connected to sharer (control)!")
+        log("Connected to sharer (control) via relay!")
 
-        # Apna naam bhejo taake sharer ki screen par badge dikhe
         self._send_command({"action": "identify", "name": self.my_username})
+        threading.Thread(target=self._control_read_loop, daemon=True).start()
+
+    def _control_read_loop(self):
+        buffer = ""
+        try:
+            while self.running:
+                data = self.control_sock.recv(4096).decode()
+                if not data:
+                    break
+                buffer += data
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    if not line.strip():
+                        continue
+                    try:
+                        msg = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    self._handle_control_message(msg)
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            log("Control channel closed")
+
+    def _handle_control_message(self, msg):
+        action = msg.get("action")
+        if action == "screen_info":
+            if self.remote_width is None:
+                self.remote_width = msg.get("width")
+                self.remote_height = msg.get("height")
+                log(f"Remote resolution from screen_info: {self.remote_width}x{self.remote_height}")
+        elif action == "host_cursor":
+            x, y = msg.get("x"), msg.get("y")
+            name = msg.get("name", "Sharer")
+            if self.window:
+                self.window.after(0, self._draw_host_cursor, x, y, name)
+
+    def _draw_host_cursor(self, x, y, name="Sharer"):
+        if x is None or y is None or not self.remote_width or not self.remote_height:
+            return
+        cx = x * (self.win_width / self.remote_width)
+        cy = y * (self.win_height / self.remote_height)
+
+        if self.host_cursor_id is None:
+            self.host_cursor_id = self.canvas.create_oval(
+                cx - 6, cy - 6, cx + 6, cy + 6,
+                fill="#FF5722", outline="white", width=2
+            )
+            self.host_cursor_label_id = self.canvas.create_text(
+                cx + 12, cy - 10, anchor="nw", text=name,
+                fill="#FF5722", font=("Segoe UI", 9, "bold")
+            )
+        else:
+            self.canvas.coords(self.host_cursor_id, cx - 6, cy - 6, cx + 6, cy + 6)
+            self.canvas.coords(self.host_cursor_label_id, cx + 12, cy - 10)
+            self.canvas.itemconfig(self.host_cursor_label_id, text=name)
+        self.canvas.tag_raise(self.host_cursor_id)
+        self.canvas.tag_raise(self.host_cursor_label_id)
 
     def _send_command(self, cmd):
         if self.control_sock:
@@ -193,21 +262,30 @@ class ScreenViewer:
                 message = json.dumps(cmd) + "\n"
                 self.control_sock.sendall(message.encode())
             except Exception as e:
-                print("Failed to send control command:", e)
+                log(f"Failed to send control command: {e}")
+
+    def _scale_coords(self, x, y):
+        if not self.remote_width or not self.remote_height or not self.win_width or not self.win_height:
+            return x, y
+        real_x = int(x * (self.remote_width / self.win_width))
+        real_y = int(y * (self.remote_height / self.win_height))
+        real_x = max(0, min(real_x, self.remote_width - 1))
+        real_y = max(0, min(real_y, self.remote_height - 1))
+        return real_x, real_y
 
     def _on_mouse_move(self, event):
-        self._send_command({"action": "move", "x": event.x, "y": event.y})
+        x, y = self._scale_coords(event.x, event.y)
+        self._send_command({"action": "move", "x": x, "y": y})
 
     def _on_click(self, event, button):
-        self._send_command({"action": "click", "x": event.x, "y": event.y, "button": button})
+        x, y = self._scale_coords(event.x, event.y)
+        self._send_command({"action": "click", "x": x, "y": y, "button": button})
 
     def _on_scroll(self, event):
-        amount = 1 if event.delta > 0 else -1
-        self._send_command({"action": "scroll", "amount": amount})
+        self._send_command({"action": "scroll", "amount": event.delta})
 
     def _on_key(self, event):
         keysym = event.keysym.lower()
-
         if keysym in self.KEY_MAP:
             self._send_command({"action": "key", "key": self.KEY_MAP[keysym]})
         elif len(event.char) == 1 and event.char.isprintable():

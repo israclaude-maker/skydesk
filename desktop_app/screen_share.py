@@ -1,7 +1,9 @@
 import socket
 import threading
+import queue
 import time
 import json
+import ctypes
 from io import BytesIO
 import mss
 from PIL import Image
@@ -11,12 +13,71 @@ import tkinter as tk
 from debug_log import log
 
 pyautogui.FAILSAFE = False
+pyautogui.PAUSE = 0
+pyautogui.MINIMUM_DURATION = 0
+pyautogui.MINIMUM_SLEEP = 0
+
+# VPS ka relay server - dono taraf (sharer + viewer) isi ko OUTBOUND connect
+# karte hain, isliye kisi ko bhi apne router mein port forward karne ki
+# zaroorat nahi padti. Agar VPS IP/domain kabhi badle to sirf yahan update
+# karna hoga (ya isko config.py mein move kar lo).
+RELAY_HOST = "76.13.219.77"
+RELAY_PORT = 9010
+
+CONNECT_RETRIES = 15
+CONNECT_RETRY_DELAY = 1  # seconds
+
+# ---------- Win32 constants for click-through, no-activate overlay ----------
+GWL_EXSTYLE = -20
+WS_EX_LAYERED = 0x00080000
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_NOACTIVATE = 0x08000000
+WS_EX_TOOLWINDOW = 0x00000080
+
+user32 = ctypes.windll.user32
+
+
+def make_click_through(tk_window):
+    """Overlay ko OS level pe click-through + no-activate bana deta hai
+    taake yeh kabhi bhi mouse/keyboard focus na le."""
+    hwnd = user32.GetParent(tk_window.winfo_id())
+    if not hwnd:
+        hwnd = tk_window.winfo_id()
+    style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+    style |= (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+
+
+def connect_to_relay(channel, session_id, role, retries=CONNECT_RETRIES):
+    """VPS relay server ko outbound connect karta hai aur handshake bhejta
+    hai taake relay isko sahi partner ke sath pair kar sake."""
+    last_error = None
+    for attempt in range(retries):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect((RELAY_HOST, RELAY_PORT))
+            sock.settimeout(None)
+            handshake = json.dumps({
+                "session_id": session_id,
+                "channel": channel,
+                "role": role,
+            }) + "\n"
+            sock.sendall(handshake.encode())
+            log(f"Connected to relay for channel={channel}, session={session_id}")
+            return sock
+        except (ConnectionRefusedError, OSError, socket.timeout) as e:
+            last_error = e
+            log(f"Relay connect attempt {attempt + 1}/{retries} for {channel} failed: {e}")
+            time.sleep(CONNECT_RETRY_DELAY)
+    log(f"Giving up connecting to relay for channel={channel} after {retries} attempts. Last error: {last_error}")
+    return None
 
 
 class CursorOverlay:
     """Sharer ki screen par controller ka naam dikhane wala chhota badge.
-    Tkinter thread-safe nahi hai, isliye har operation main_root.after() se
-    main thread mein bheja jata hai."""
+    Click-through + no-activate hai, isliye kabhi bhi mouse/keyboard input
+    intercept nahi karega."""
 
     def __init__(self, main_root, label_text):
         self.main_root = main_root
@@ -35,6 +96,11 @@ class CursorOverlay:
         )
         self.label.pack()
         self.window.geometry("+0+0")
+        self.window.update_idletasks()
+        try:
+            make_click_through(self.window)
+        except Exception as e:
+            log(f"CursorOverlay click-through style failed: {e}")
 
     def move_to(self, x, y):
         self.main_root.after(0, self._move, x, y)
@@ -60,36 +126,26 @@ class CursorOverlay:
 
 
 class ScreenSharer:
-    def __init__(self, main_root, screen_port=9001, control_port=9002):
+    def __init__(self, main_root, session_id, username="Sharer"):
         self.main_root = main_root
-        self.screen_port = screen_port
-        self.control_port = control_port
+        self.session_id = session_id
+        self.username = username
         self.running = False
         self.overlay = None
+        self.cmd_queue = queue.Queue()
+        self._control_conn_alive = False
 
     def start(self):
-        log("ScreenSharer.start() called - launching screen + control servers")
+        log(f"ScreenSharer.start() called for session={self.session_id} via relay {RELAY_HOST}:{RELAY_PORT}")
         self.running = True
-        threading.Thread(target=self._run_screen_server, daemon=True).start()
-        threading.Thread(target=self._run_control_server, daemon=True).start()
+        threading.Thread(target=self._run_screen_channel, daemon=True).start()
+        threading.Thread(target=self._run_control_channel, daemon=True).start()
+        threading.Thread(target=self._command_worker, daemon=True).start()
 
-    # ---------- SCREEN STREAMING ----------
-    def _run_screen_server(self):
-        try:
-            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_socket.bind(("0.0.0.0", self.screen_port))
-            server_socket.listen(1)
-            log(f"Screen sharing server listening on port {self.screen_port}")
-        except OSError as e:
-            log(f"FAILED to bind screen server on port {self.screen_port}: {e}")
-            return
-
-        try:
-            conn, addr = server_socket.accept()
-            log(f"Viewer connected from {addr}")
-        except OSError as e:
-            log(f"FAILED to accept viewer connection: {e}")
+    # ---------- SCREEN STREAMING (via relay) ----------
+    def _run_screen_channel(self):
+        conn = connect_to_relay("screen", self.session_id, "sharer")
+        if conn is None:
             return
 
         try:
@@ -114,24 +170,27 @@ class ScreenSharer:
         finally:
             conn.close()
 
-    # ---------- CONTROL RECEIVING ----------
-    def _run_control_server(self):
-        try:
-            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_socket.bind(("0.0.0.0", self.control_port))
-            server_socket.listen(1)
-            log(f"Control server listening on port {self.control_port}")
-        except OSError as e:
-            log(f"FAILED to bind control server on port {self.control_port}: {e}")
+    # ---------- CONTROL (via relay) ----------
+    def _run_control_channel(self):
+        conn = connect_to_relay("control", self.session_id, "sharer")
+        if conn is None:
             return
 
+        # Real screen resolution ek dafa bhej do - viewer isse coordinate
+        # scaling sahi karega.
         try:
-            conn, addr = server_socket.accept()
-            log(f"Controller connected from {addr}")
-        except OSError as e:
-            log(f"FAILED to accept controller connection: {e}")
-            return
+            with mss.mss() as sct:
+                mon = sct.monitors[1]
+            screen_info = json.dumps({
+                "action": "screen_info",
+                "width": mon["width"],
+                "height": mon["height"],
+            }) + "\n"
+            conn.sendall(screen_info.encode())
+        except Exception as e:
+            log(f"Failed to send screen_info: {e}")
+
+        self._host_cursor_send_thread(conn)
 
         buffer = ""
         try:
@@ -143,13 +202,74 @@ class ScreenSharer:
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
                     if line.strip():
-                        self._execute_command(json.loads(line))
+                        try:
+                            cmd = json.loads(line)
+                            self.cmd_queue.put(cmd)
+                        except json.JSONDecodeError as e:
+                            log(f"Bad command JSON ignored: {e}")
         except (ConnectionResetError, BrokenPipeError):
-            print("Controller disconnected")
+            log("Controller disconnected")
         finally:
+            self._control_conn_alive = False
             if self.overlay:
                 self.overlay.close()
             conn.close()
+
+    def _host_cursor_send_thread(self, conn):
+        """Sharer ki apni real mouse position har ~50ms mein viewer ko
+        wapas bhejta hai (naam ke sath), taake viewer usko bhi dikha sake."""
+        self._control_conn_alive = True
+
+        def _worker():
+            last_pos = None
+            while self.running and self._control_conn_alive:
+                try:
+                    x, y = pyautogui.position()
+                except Exception:
+                    time.sleep(0.05)
+                    continue
+                if (x, y) != last_pos:
+                    last_pos = (x, y)
+                    try:
+                        msg = json.dumps({
+                            "action": "host_cursor",
+                            "x": x,
+                            "y": y,
+                            "name": self.username,
+                        }) + "\n"
+                        conn.sendall(msg.encode())
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break
+                time.sleep(0.05)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    # ---------- COMMAND EXECUTION (separate worker thread) ----------
+    def _command_worker(self):
+        while True:
+            try:
+                cmd = self.cmd_queue.get()
+            except Exception:
+                continue
+
+            if cmd.get("action") == "move":
+                latest_move = cmd
+                while True:
+                    try:
+                        next_cmd = self.cmd_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if next_cmd.get("action") == "move":
+                        latest_move = next_cmd
+                    else:
+                        self._execute_command(latest_move)
+                        self._execute_command(next_cmd)
+                        latest_move = None
+                        break
+                if latest_move is not None:
+                    self._execute_command(latest_move)
+            else:
+                self._execute_command(cmd)
 
     def _execute_command(self, cmd):
         action = cmd.get("action")
@@ -163,7 +283,7 @@ class ScreenSharer:
                     self.overlay.set_text(badge_text)
 
             elif action == "move":
-                pyautogui.moveTo(cmd["x"], cmd["y"])
+                pyautogui.moveTo(cmd["x"], cmd["y"], duration=0)
                 if self.overlay:
                     self.overlay.move_to(cmd["x"], cmd["y"])
 
@@ -177,12 +297,16 @@ class ScreenSharer:
                 pyautogui.press(cmd["key"])
 
             elif action == "type":
-                pyautogui.typewrite(cmd["text"])
+                pyautogui.write(cmd["text"], interval=0)
+
+            else:
+                log(f"Unknown command action received: {action}")
 
         except Exception as e:
-            print("Control execution error:", e)
+            log(f"Control execution error for cmd={cmd}: {e}")
 
     def stop(self):
         self.running = False
+        self._control_conn_alive = False
         if self.overlay:
             self.overlay.close()
