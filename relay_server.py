@@ -19,7 +19,7 @@ import json
 import logging
 
 HOST = "0.0.0.0"
-PORT = 9010
+PORT = 443
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,7 +76,25 @@ def handle_client(conn, addr):
         partner = None
         with lock:
             if key in waiting:
-                partner = waiting.pop(key)
+                candidate = waiting.pop(key)
+                # candidate abhi bhi zinda hai ya nahi, quick check
+                try:
+                    candidate.settimeout(0.001)
+                    dead = candidate.recv(1, socket.MSG_PEEK) == b""
+                    candidate.settimeout(None)
+                except BlockingIOError:
+                    dead = False
+                except OSError:
+                    dead = True
+                if dead:
+                    log.warning(f"Stale partner found for session={session_id} channel={channel}, discarding")
+                    try:
+                        candidate.close()
+                    except OSError:
+                        pass
+                    waiting[key] = conn
+                else:
+                    partner = candidate
             else:
                 waiting[key] = conn
 

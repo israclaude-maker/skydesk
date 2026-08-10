@@ -22,7 +22,7 @@ pyautogui.MINIMUM_SLEEP = 0
 # zaroorat nahi padti. Agar VPS IP/domain kabhi badle to sirf yahan update
 # karna hoga (ya isko config.py mein move kar lo).
 RELAY_HOST = "76.13.219.77"
-RELAY_PORT = 9010
+RELAY_PORT = 443
 
 CONNECT_RETRIES = 15
 CONNECT_RETRY_DELAY = 1  # seconds
