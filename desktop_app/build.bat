@@ -5,7 +5,7 @@ echo ===================================
 
 echo.
 echo [1/2] Building EXE with PyInstaller...
-"C:\Python314\Scripts\pyinstaller.exe" --onefile --windowed --name SkyDesk --icon=SkyDesk.ico login_window.py
+"C:\Python314\Scripts\pyinstaller.exe" --onefile --windowed --name SkyDesk --icon=SkyDesk.ico --hidden-import=websocket --hidden-import=websocket._app --hidden-import=websocket._core --collect-all websocket login_window.py
 
 echo.
 echo [2/2] Building Installer with Inno Setup...
