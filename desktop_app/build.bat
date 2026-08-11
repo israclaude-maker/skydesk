@@ -5,12 +5,11 @@ echo ===================================
 
 echo.
 echo [1/2] Building EXE with PyInstaller...
-call venv\Scripts\activate
-pyinstaller --onefile --windowed --name SkyDesk --icon=SkyDesk.ico login_window.py
+"C:\Python314\Scripts\pyinstaller.exe" --onefile --windowed --name SkyDesk --icon=SkyDesk.ico login_window.py
 
 echo.
 echo [2/2] Building Installer with Inno Setup...
-"C:\Users\skypc\AppData\Local\Programs\Inno Setup 6\ISCC.exe" installer_script.iss
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer_script.iss
 
 echo.
 echo ===================================
