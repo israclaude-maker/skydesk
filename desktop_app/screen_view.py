@@ -10,7 +10,7 @@ from tkinter import messagebox
 from debug_log import log
 
 RELAY_HOST = "76.13.219.77"
-RELAY_PORT = 8443
+RELAY_PORT = 8444
 
 
 class ScreenViewer:

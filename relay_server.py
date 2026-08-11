@@ -19,7 +19,7 @@ import json
 import logging
 
 HOST = "0.0.0.0"
-PORT = 8443
+PORT = 8444
 
 logging.basicConfig(
     level=logging.INFO,
