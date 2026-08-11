@@ -98,6 +98,7 @@ class ScreenViewer:
                 return None
             try:
                 ws = websocket.create_connection(RELAY_WS_URL, timeout=10)
+                ws.settimeout(None)  # connect timeout only - don't timeout while waiting for a partner
                 handshake = json.dumps({
                     "session_id": self.session_id,
                     "channel": channel,

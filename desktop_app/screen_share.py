@@ -53,6 +53,7 @@ def connect_to_relay(channel, session_id, role, retries=CONNECT_RETRIES):
     for attempt in range(retries):
         try:
             ws = websocket.create_connection(RELAY_WS_URL, timeout=10)
+            ws.settimeout(None)  # connect timeout only - don't timeout while waiting for a partner
             handshake = json.dumps({
                 "session_id": session_id,
                 "channel": channel,
