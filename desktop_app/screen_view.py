@@ -1,5 +1,3 @@
-import socket
-import struct
 import threading
 import time
 import json
@@ -7,10 +5,13 @@ from io import BytesIO
 from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import messagebox
+import websocket
 from debug_log import log
 
-RELAY_HOST = "76.13.219.77"
-RELAY_PORT = 8444
+# Relay ab WebSocket (wss://) ke through, VPS ke already-open HTTPS (443)
+# port par - isliye har network isko pass hone deta hai, chahe wo sirf
+# real HTTPS traffic allow karta ho.
+RELAY_WS_URL = "wss://skydesk.skyfinancia.com/relay/"
 
 
 class ScreenViewer:
@@ -57,7 +58,7 @@ class ScreenViewer:
         self._photo_ref = None
 
     def start(self):
-        log(f"ScreenViewer starting for session={self.session_id} via relay {RELAY_HOST}:{RELAY_PORT}")
+        log(f"ScreenViewer starting for session={self.session_id} via relay {RELAY_WS_URL}")
         self.window = tk.Toplevel()
         self.window.title("SkyDesk - Remote Screen")
         self.window.geometry("1000x650")
@@ -96,19 +97,16 @@ class ScreenViewer:
             if not self.running and attempt > 0:
                 return None
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                sock.connect((RELAY_HOST, RELAY_PORT))
-                sock.settimeout(None)
+                ws = websocket.create_connection(RELAY_WS_URL, timeout=10)
                 handshake = json.dumps({
                     "session_id": self.session_id,
                     "channel": channel,
                     "role": "viewer",
-                }) + "\n"
-                sock.sendall(handshake.encode())
+                })
+                ws.send(handshake)
                 log(f"Connected to relay for channel={channel}")
-                return sock
-            except (ConnectionRefusedError, OSError, socket.timeout) as e:
+                return ws
+            except Exception as e:
                 last_error = e
                 log(f"Relay connect attempt {attempt + 1}/{self.CONNECT_RETRIES} for {channel} failed: {e}")
             time.sleep(self.CONNECT_RETRY_DELAY)
@@ -122,29 +120,12 @@ class ScreenViewer:
             return
 
         log("Connected to sharer (screen) via relay!")
-        data = b""
-        payload_size = struct.calcsize(">L")
 
         try:
             while self.running:
-                while len(data) < payload_size:
-                    packet = sock.recv(4096)
-                    if not packet:
-                        return
-                    data += packet
-
-                packed_size = data[:payload_size]
-                data = data[payload_size:]
-                msg_size = struct.unpack(">L", packed_size)[0]
-
-                while len(data) < msg_size:
-                    chunk = sock.recv(4096)
-                    if not chunk:
-                        return
-                    data += chunk
-
-                frame_data = data[:msg_size]
-                data = data[msg_size:]
+                frame_data = sock.recv()
+                if not frame_data or isinstance(frame_data, str):
+                    continue
 
                 img = Image.open(BytesIO(frame_data))
 
@@ -153,10 +134,13 @@ class ScreenViewer:
                     log(f"Remote resolution detected from frame: {self.remote_width}x{self.remote_height}")
 
                 self.window.after(0, self._update_image, img)
-        except (ConnectionResetError, BrokenPipeError, OSError):
+        except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError):
             log("Sharer disconnected")
         finally:
-            sock.close()
+            try:
+                sock.close()
+            except Exception:
+                pass
 
     def _connection_failed(self):
         if self.canvas and self.status_text_id:
@@ -202,23 +186,17 @@ class ScreenViewer:
         threading.Thread(target=self._control_read_loop, daemon=True).start()
 
     def _control_read_loop(self):
-        buffer = ""
         try:
             while self.running:
-                data = self.control_sock.recv(4096).decode()
-                if not data:
-                    break
-                buffer += data
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    if not line.strip():
-                        continue
-                    try:
-                        msg = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    self._handle_control_message(msg)
-        except (ConnectionResetError, BrokenPipeError, OSError):
+                raw = self.control_sock.recv()
+                if not raw or isinstance(raw, bytes):
+                    continue
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                self._handle_control_message(msg)
+        except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError):
             log("Control channel closed")
 
     def _handle_control_message(self, msg):
@@ -259,8 +237,7 @@ class ScreenViewer:
     def _send_command(self, cmd):
         if self.control_sock:
             try:
-                message = json.dumps(cmd) + "\n"
-                self.control_sock.sendall(message.encode())
+                self.control_sock.send(json.dumps(cmd))
             except Exception as e:
                 log(f"Failed to send control command: {e}")
 
@@ -294,6 +271,9 @@ class ScreenViewer:
     def stop(self):
         self.running = False
         if self.control_sock:
-            self.control_sock.close()
+            try:
+                self.control_sock.close()
+            except Exception:
+                pass
         if self.window:
             self.window.destroy()

@@ -1,25 +1,30 @@
 """
-SkyDesk Relay Server
-=====================
-Yeh VPS par ek ALAG standalone service ke roop mein chalti hai (Django se
-bilkul separate). Kaam simple hai: dono taraf (sharer + viewer) isi VPS ko
-OUTBOUND connect karte hain (session_id + channel batate hain), aur yeh
-dono connections ko "pair" karke unke beech raw bytes relay kar deti hai.
+SkyDesk Relay Server - WebSocket Version
+==========================================
+Purani relay raw TCP socket pe thi (port 8443/8444 wagera) - jo bohot se
+restrictive networks (jo sirf real HTTPS traffic allow karte hain) block
+kar dete the.
 
-Isse kisi bhi user ko apne router mein port-forwarding karne ki zaroorat
-NAHI padti - dono taraf sirf bahar (VPS) ki taraf connect kar rahe hain,
-jo har normal ghar/office ka router allow karta hai.
+Ab ye relay sirf LOCALHOST (127.0.0.1:8765) pe chalti hai - kisi ko bhi
+seedha internet se yahan connect nahi karna. Nginx already-configured
+HTTPS (port 443, skydesk.skyfinancia.com) ke through /relay/ path pe
+isko proxy karta hai. Isliye client ki taraf se ye traffic bilkul normal
+website HTTPS traffic jaisa dikhta hai, aur har network isko pass hone
+deta hai - jo bhi network already skydesk.skyfinancia.com khol sakta hai
+(matlab browser use kar sakta hai), wo isay bhi allow karega.
 
 Run: python3 relay_server.py
-Systemd service se background mein hamesha chalao (neeche instructions).
+Systemd service (skydesk-relay) se background mein hamesha chalao.
+
+VPS pe pehli dafa chalane se pehle: pip3 install websockets
 """
-import socket
-import threading
+import asyncio
 import json
 import logging
+import websockets
 
-HOST = "0.0.0.0"
-PORT = 8444
+HOST = "127.0.0.1"
+PORT = 8765
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,107 +32,106 @@ logging.basicConfig(
 )
 log = logging.getLogger("relay")
 
-# Jo connection abhi apne partner ka wait kar raha hai: (session_id, channel) -> socket
+
+class Waiter:
+    """Ek connection jo abhi apne partner ka wait kar raha hai."""
+
+    def __init__(self, ws):
+        self.ws = ws
+        self.partner = None
+        self.event = asyncio.Event()
+
+
+# (session_id, channel) -> Waiter
 waiting = {}
-lock = threading.Lock()
+lock = asyncio.Lock()
 
 
-def pipe(src, dst, label):
-    """Ek direction mein bytes forward karta hai - jab tak connection zinda hai."""
+async def pipe(src, dst):
+    """Ek direction mein messages forward karta hai - jab tak connection zinda hai."""
     try:
-        while True:
-            data = src.recv(4096)
-            if not data:
-                break
-            dst.sendall(data)
-    except OSError:
+        async for message in src:
+            await dst.send(message)
+    except websockets.exceptions.ConnectionClosed:
         pass
-    finally:
-        try:
-            dst.shutdown(socket.SHUT_WR)
-        except OSError:
-            pass
+    except Exception as e:
+        log.error(f"Pipe error: {e}")
 
 
-def handle_client(conn, addr):
+async def handle_client(ws):
     try:
-        conn.settimeout(20)
-        buf = b""
-        while b"\n" not in buf:
-            chunk = conn.recv(1024)
-            if not chunk:
-                conn.close()
-                return
-            buf += chunk
-        line, _rest = buf.split(b"\n", 1)
-        handshake = json.loads(line.decode())
+        raw = await asyncio.wait_for(ws.recv(), timeout=20)
+        handshake = json.loads(raw)
         session_id = handshake.get("session_id")
         channel = handshake.get("channel")  # "screen" ya "control"
         role = handshake.get("role", "?")
 
         if not session_id or not channel:
-            log.warning(f"Bad handshake from {addr}: {handshake}")
-            conn.close()
+            log.warning(f"Bad handshake: {handshake}")
+            await ws.close()
             return
 
-        conn.settimeout(None)
         key = (session_id, channel)
 
         partner = None
-        with lock:
-            if key in waiting:
-                candidate = waiting.pop(key)
-                # candidate abhi bhi zinda hai ya nahi, quick check
-                try:
-                    candidate.settimeout(0.001)
-                    dead = candidate.recv(1, socket.MSG_PEEK) == b""
-                    candidate.settimeout(None)
-                except BlockingIOError:
-                    dead = False
-                except OSError:
-                    dead = True
-                if dead:
-                    log.warning(f"Stale partner found for session={session_id} channel={channel}, discarding")
-                    try:
-                        candidate.close()
-                    except OSError:
-                        pass
-                    waiting[key] = conn
-                else:
-                    partner = candidate
+        my_waiter = None
+        async with lock:
+            existing = waiting.get(key)
+            if existing is not None and existing.ws.close_code is None:
+                # Partner already waiting - claim it and wake it up
+                partner = existing.ws
+                del waiting[key]
+                existing.partner = ws
+                existing.event.set()
             else:
-                waiting[key] = conn
+                my_waiter = Waiter(ws)
+                waiting[key] = my_waiter
 
         if partner is None:
-            log.info(f"{role} ({addr}) waiting for partner: session={session_id} channel={channel}")
-            return  # is thread ka kaam khatam - conn dict mein park hai
+            log.info(f"{role} waiting for partner: session={session_id} channel={channel}")
+            closed_task = asyncio.ensure_future(ws.wait_closed())
+            event_task = asyncio.ensure_future(my_waiter.event.wait())
+            done, pending = await asyncio.wait(
+                {closed_task, event_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            for t in pending:
+                t.cancel()
+            async with lock:
+                if waiting.get(key) is my_waiter:
+                    del waiting[key]
+            if my_waiter.partner is None:
+                return  # connection closed before a partner showed up
+            partner = my_waiter.partner
 
         log.info(f"Paired session={session_id} channel={channel} - relaying started")
+        await asyncio.gather(
+            pipe(ws, partner),
+            pipe(partner, ws),
+            return_exceptions=True,
+        )
 
-        t1 = threading.Thread(target=pipe, args=(conn, partner, "a->b"), daemon=True)
-        t2 = threading.Thread(target=pipe, args=(partner, conn, "b->a"), daemon=True)
-        t1.start()
-        t2.start()
-
-    except Exception as e:
-        log.error(f"Error handling client {addr}: {e}")
+    except asyncio.TimeoutError:
+        log.warning("Handshake timeout - closing connection")
         try:
-            conn.close()
-        except OSError:
+            await ws.close()
+        except Exception:
             pass
+    except Exception as e:
+        log.error(f"Error handling client: {e}")
 
 
-def main():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((HOST, PORT))
-    server.listen(100)
-    log.info(f"SkyDesk relay server listening on {HOST}:{PORT}")
-
-    while True:
-        conn, addr = server.accept()
-        threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+async def main():
+    log.info(f"SkyDesk relay (WebSocket) listening on {HOST}:{PORT}")
+    async with websockets.serve(
+        handle_client,
+        HOST,
+        PORT,
+        max_size=None,       # screen frames can be larger than default 1MB limit
+        ping_interval=None,  # let nginx/TCP handle keepalive; avoids issues with
+                              # the sharer's screen channel which never calls recv()
+    ):
+        await asyncio.Future()  # run forever
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

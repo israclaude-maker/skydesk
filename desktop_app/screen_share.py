@@ -1,4 +1,3 @@
-import socket
 import threading
 import queue
 import time
@@ -7,9 +6,9 @@ import ctypes
 from io import BytesIO
 import mss
 from PIL import Image
-import struct
 import pyautogui
 import tkinter as tk
+import websocket
 from debug_log import log
 
 pyautogui.FAILSAFE = False
@@ -17,12 +16,11 @@ pyautogui.PAUSE = 0
 pyautogui.MINIMUM_DURATION = 0
 pyautogui.MINIMUM_SLEEP = 0
 
-# VPS ka relay server - dono taraf (sharer + viewer) isi ko OUTBOUND connect
-# karte hain, isliye kisi ko bhi apne router mein port forward karne ki
-# zaroorat nahi padti. Agar VPS IP/domain kabhi badle to sirf yahan update
-# karna hoga (ya isko config.py mein move kar lo).
-RELAY_HOST = "76.13.219.77"
-RELAY_PORT = 8444
+# Relay ab WebSocket (wss://) ke through, VPS ke already-open HTTPS (443)
+# port par - isliye har network isko pass hone deta hai, chahe wo sirf
+# real HTTPS traffic allow karta ho. Agar domain kabhi badle to sirf
+# yahan update karna hoga (ya isko config.py mein move kar lo).
+RELAY_WS_URL = "wss://skydesk.skyfinancia.com/relay/"
 
 CONNECT_RETRIES = 15
 CONNECT_RETRY_DELAY = 1  # seconds
@@ -49,24 +47,21 @@ def make_click_through(tk_window):
 
 
 def connect_to_relay(channel, session_id, role, retries=CONNECT_RETRIES):
-    """VPS relay server ko outbound connect karta hai aur handshake bhejta
+    """VPS relay (WebSocket) ko connect karta hai aur handshake bhejta
     hai taake relay isko sahi partner ke sath pair kar sake."""
     last_error = None
     for attempt in range(retries):
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect((RELAY_HOST, RELAY_PORT))
-            sock.settimeout(None)
+            ws = websocket.create_connection(RELAY_WS_URL, timeout=10)
             handshake = json.dumps({
                 "session_id": session_id,
                 "channel": channel,
                 "role": role,
-            }) + "\n"
-            sock.sendall(handshake.encode())
+            })
+            ws.send(handshake)
             log(f"Connected to relay for channel={channel}, session={session_id}")
-            return sock
-        except (ConnectionRefusedError, OSError, socket.timeout) as e:
+            return ws
+        except Exception as e:
             last_error = e
             log(f"Relay connect attempt {attempt + 1}/{retries} for {channel} failed: {e}")
             time.sleep(CONNECT_RETRY_DELAY)
@@ -136,7 +131,7 @@ class ScreenSharer:
         self._control_conn_alive = False
 
     def start(self):
-        log(f"ScreenSharer.start() called for session={self.session_id} via relay {RELAY_HOST}:{RELAY_PORT}")
+        log(f"ScreenSharer.start() called for session={self.session_id} via relay {RELAY_WS_URL}")
         self.running = True
         threading.Thread(target=self._run_screen_channel, daemon=True).start()
         threading.Thread(target=self._run_control_channel, daemon=True).start()
@@ -159,16 +154,20 @@ class ScreenSharer:
                     img.save(buffer, format="JPEG", quality=50)
                     data = buffer.getvalue()
 
-                    size = struct.pack(">L", len(data))
-                    conn.sendall(size + data)
+                    # WebSocket messages already have their own boundaries -
+                    # no need to manually prefix with a length like raw TCP did.
+                    conn.send(data, opcode=websocket.ABNF.OPCODE_BINARY)
 
                     time.sleep(1 / 15)
-        except (ConnectionResetError, BrokenPipeError) as e:
+        except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError) as e:
             log(f"Viewer disconnected: {e}")
         except Exception as e:
             log(f"Screen capture/send error: {e}")
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     # ---------- CONTROL (via relay) ----------
     def _run_control_channel(self):
@@ -185,35 +184,33 @@ class ScreenSharer:
                 "action": "screen_info",
                 "width": mon["width"],
                 "height": mon["height"],
-            }) + "\n"
-            conn.sendall(screen_info.encode())
+            })
+            conn.send(screen_info)
         except Exception as e:
             log(f"Failed to send screen_info: {e}")
 
         self._host_cursor_send_thread(conn)
 
-        buffer = ""
         try:
             while self.running:
-                data = conn.recv(4096).decode()
-                if not data:
-                    break
-                buffer += data
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    if line.strip():
-                        try:
-                            cmd = json.loads(line)
-                            self.cmd_queue.put(cmd)
-                        except json.JSONDecodeError as e:
-                            log(f"Bad command JSON ignored: {e}")
-        except (ConnectionResetError, BrokenPipeError):
+                raw = conn.recv()
+                if not raw or isinstance(raw, bytes):
+                    continue
+                try:
+                    cmd = json.loads(raw)
+                    self.cmd_queue.put(cmd)
+                except json.JSONDecodeError as e:
+                    log(f"Bad command JSON ignored: {e}")
+        except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError):
             log("Controller disconnected")
         finally:
             self._control_conn_alive = False
             if self.overlay:
                 self.overlay.close()
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def _host_cursor_send_thread(self, conn):
         """Sharer ki apni real mouse position har ~50ms mein viewer ko
@@ -236,9 +233,9 @@ class ScreenSharer:
                             "x": x,
                             "y": y,
                             "name": self.username,
-                        }) + "\n"
-                        conn.sendall(msg.encode())
-                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        })
+                        conn.send(msg)
+                    except (websocket.WebSocketConnectionClosedException, BrokenPipeError, ConnectionResetError, OSError):
                         break
                 time.sleep(0.05)
 
