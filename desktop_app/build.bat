@@ -9,7 +9,7 @@ echo [1/2] Building EXE with PyInstaller...
 
 echo.
 echo [2/2] Building Installer with Inno Setup...
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer_script.iss
+"C:\Users\skypc\AppData\Local\Programs\Inno Setup 6\ISCC.exe" installer_script.iss
 
 echo.
 echo ===================================
