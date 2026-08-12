@@ -47,6 +47,11 @@ waiting = {}
 lock = asyncio.Lock()
 
 
+# Websockets jo currently kisi pipe mein active hain - taake koi connection
+# galti se do dafa pair na ho jaye (race condition guard).
+active_conns = set()
+
+
 async def pipe(src, dst):
     """Ek direction mein messages forward karta hai - jab tak connection zinda hai."""
     try:
@@ -103,12 +108,29 @@ async def handle_client(ws):
                 return  # connection closed before a partner showed up
             partner = my_waiter.partner
 
+        # Safety guard: agar ye connection (ya iska partner) kisi wajah se
+        # PEHLE se kisi aur pipe mein active hai, tou dobara relay start
+        # mat karo - warna dono taraf recv() do dafa call ho jayega aur
+        # crash ho jayega (jo pehle ho raha tha).
+        async with lock:
+            if ws in active_conns or partner in active_conns:
+                log.warning(f"Duplicate pairing detected for session={session_id} channel={channel} - closing extra connection")
+                await ws.close()
+                return
+            active_conns.add(ws)
+            active_conns.add(partner)
+
         log.info(f"Paired session={session_id} channel={channel} - relaying started")
-        await asyncio.gather(
-            pipe(ws, partner),
-            pipe(partner, ws),
-            return_exceptions=True,
-        )
+        try:
+            await asyncio.gather(
+                pipe(ws, partner),
+                pipe(partner, ws),
+                return_exceptions=True,
+            )
+        finally:
+            async with lock:
+                active_conns.discard(ws)
+                active_conns.discard(partner)
 
     except asyncio.TimeoutError:
         log.warning("Handshake timeout - closing connection")
