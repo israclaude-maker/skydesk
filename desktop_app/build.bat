@@ -5,7 +5,12 @@ echo ===================================
 
 echo.
 echo [1/2] Building EXE with PyInstaller...
-"C:\Python314\Scripts\pyinstaller.exe" --onefile --windowed --name SkyDesk --icon=SkyDesk.ico --hidden-import=websocket --hidden-import=websocket._app --hidden-import=websocket._core --collect-all websocket login_window.py
+"C:\Python314\Scripts\pyinstaller.exe" --onefile --windowed --name SkyDesk --icon=SkyDesk.ico ^
+  --hidden-import=websocket --hidden-import=websocket._app --hidden-import=websocket._core --collect-all websocket ^
+  --hidden-import=pyautogui --hidden-import=pymsgbox --hidden-import=pytweening --hidden-import=pyscreeze --hidden-import=pygetwindow --hidden-import=mouseinfo --collect-all pyautogui ^
+  --hidden-import=mss --hidden-import=mss.windows --collect-all mss ^
+  --collect-all PIL ^
+  login_window.py
 
 echo.
 echo [2/2] Building Installer with Inno Setup...

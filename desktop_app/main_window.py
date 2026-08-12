@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox
 from ws_client import WSClient
+from debug_log import log
 
 
 class MainWindow:
@@ -87,7 +88,20 @@ class MainWindow:
         messagebox.showinfo("Request Sent", f"Connection request sent to {target_id}")
 
     def handle_ws_message(self, data):
-        self.root.after(0, self._process_message, data)
+        log(f"WS message received: {data.get('type')}")
+        self.root.after(0, self._process_message_safe, data)
+
+    def _process_message_safe(self, data):
+        try:
+            self._process_message(data)
+        except Exception as e:
+            import traceback
+            log(f"ERROR in _process_message: {e}")
+            log(traceback.format_exc())
+            try:
+                messagebox.showerror("SkyDesk Error", f"Something went wrong: {e}")
+            except Exception:
+                pass
 
     def _process_message(self, data):
         msg_type = data.get("type")
@@ -110,6 +124,7 @@ class MainWindow:
                 "Accepted",
                 f"{data.get('from_remote_id')} accepted! Connecting to screen...",
             )
+            log(f"id_connect_accept received, session_id={session_id} - starting ScreenViewer")
             from screen_view import ScreenViewer
 
             viewer = ScreenViewer(
@@ -123,14 +138,16 @@ class MainWindow:
                 "Rejected", f"{data.get('from_remote_id')} rejected your request."
             )
         elif msg_type == "session_start":
+            session_id = data.get("session_id")
+            log(f"session_start received, session_id={session_id} - starting ScreenSharer")
             from screen_share import ScreenSharer
 
-            session_id = data.get("session_id")
             sharer = ScreenSharer(
                 main_root=self.root, session_id=session_id,
                 username=self.user_data["username"]
             )
             sharer.start()
+            log("ScreenSharer.start() returned successfully")
             messagebox.showinfo("Sharing Started", "Your screen is now being shared!")
 
         elif msg_type == "error":
