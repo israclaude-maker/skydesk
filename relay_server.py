@@ -47,11 +47,6 @@ waiting = {}
 lock = asyncio.Lock()
 
 
-# Websockets jo currently kisi pipe mein active hain - taake koi connection
-# galti se do dafa pair na ho jaye (race condition guard).
-active_conns = set()
-
-
 async def pipe(src, dst):
     """Ek direction mein messages forward karta hai - jab tak connection zinda hai."""
     try:
@@ -92,45 +87,41 @@ async def handle_client(ws):
                 my_waiter = Waiter(ws)
                 waiting[key] = my_waiter
 
-        if partner is None:
-            log.info(f"{role} waiting for partner: session={session_id} channel={channel}")
-            closed_task = asyncio.ensure_future(ws.wait_closed())
-            event_task = asyncio.ensure_future(my_waiter.event.wait())
-            done, pending = await asyncio.wait(
-                {closed_task, event_task}, return_when=asyncio.FIRST_COMPLETED
-            )
-            for t in pending:
-                t.cancel()
-            async with lock:
-                if waiting.get(key) is my_waiter:
-                    del waiting[key]
-            if my_waiter.partner is None:
-                return  # connection closed before a partner showed up
-            partner = my_waiter.partner
-
-        # Safety guard: agar ye connection (ya iska partner) kisi wajah se
-        # PEHLE se kisi aur pipe mein active hai, tou dobara relay start
-        # mat karo - warna dono taraf recv() do dafa call ho jayega aur
-        # crash ho jayega (jo pehle ho raha tha).
-        async with lock:
-            if ws in active_conns or partner in active_conns:
-                log.warning(f"Duplicate pairing detected for session={session_id} channel={channel} - closing extra connection")
-                await ws.close()
-                return
-            active_conns.add(ws)
-            active_conns.add(partner)
-
-        log.info(f"Paired session={session_id} channel={channel} - relaying started")
-        try:
+        if partner is not None:
+            # HAM CLAIMER HAIN: humne kisi pehle se maujood waiter ko pakड़ liya.
+            # Sirf HAM relay start karte hain (dono directions) - taake dono
+            # taraf se ek sath recv() na ho jaye. Doosri coroutine (jo waiter
+            # thi) sirf apni connection khuli rakhegi, khud relay nahi karegi.
+            log.info(f"Paired session={session_id} channel={channel} - relaying started")
             await asyncio.gather(
                 pipe(ws, partner),
                 pipe(partner, ws),
                 return_exceptions=True,
             )
-        finally:
-            async with lock:
-                active_conns.discard(ws)
-                active_conns.discard(partner)
+            return
+
+        # HAM WAITER HAIN: apne partner ka wait karo.
+        log.info(f"{role} waiting for partner: session={session_id} channel={channel}")
+        closed_task = asyncio.ensure_future(ws.wait_closed())
+        event_task = asyncio.ensure_future(my_waiter.event.wait())
+        done, pending = await asyncio.wait(
+            {closed_task, event_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
+        async with lock:
+            if waiting.get(key) is my_waiter:
+                del waiting[key]
+
+        if my_waiter.partner is None:
+            return  # connection closed before a partner showed up
+
+        # Kisi doosri connection ne humein claim kar liya - wahi coroutine
+        # ab dono directions relay kar rahi hai (hamare 'ws' ko bhi istemal
+        # karte hue). Hum sirf apni connection ko zinda rakhte hain jab tak
+        # wo band na ho - khud koi recv()/relay nahi karte, warna double
+        # recv() ka crash ho jayega.
+        await ws.wait_closed()
 
     except asyncio.TimeoutError:
         log.warning("Handshake timeout - closing connection")
