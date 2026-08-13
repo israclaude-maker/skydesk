@@ -294,20 +294,15 @@ class ScreenSharer:
         action = cmd.get("action")
         try:
             if action == "identify":
-                name = cmd.get("name", "?")
-                badge_text = name[0].upper()
-                if self.overlay is None:
-                    self.overlay = CursorOverlay(self.main_root, badge_text)
-                else:
-                    self.overlay.set_text(badge_text)
-                # Controller connect ho gaya - ab sharer ka apna mouse/keyboard
-                # block kar do taake dono ka input ek dusre se na takraye.
+                # Pehle yahan ek badge/circle dikhaya jata tha controller ka
+                # naam batane ke liye - lekin asal OS cursor already move
+                # ho raha hota hai controller ke commands se, isliye badge
+                # + real cursor dono sath dikhna "do mouse" jaisa confusing
+                # lagta tha. Ab sirf input block karo, extra badge mat dikhao.
                 self._set_input_blocked(True)
 
             elif action == "move":
                 pyautogui.moveTo(cmd["x"], cmd["y"], duration=0)
-                if self.overlay:
-                    self.overlay.move_to(cmd["x"], cmd["y"])
 
             elif action == "click":
                 pyautogui.click(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
