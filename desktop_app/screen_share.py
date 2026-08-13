@@ -34,6 +34,12 @@ WS_EX_TOOLWINDOW = 0x00000080
 
 user32 = ctypes.windll.user32
 
+# Module-level singleton: sirf EK badge/overlay window hamesha exist kare.
+# Agar purani session ka overlay properly band nahi hua tha (crash/abrupt
+# disconnect), naya ScreenSharer start hote hi ye purane ko destroy kar
+# dega - taake kabhi do overlays ek sath na dikhein.
+_active_overlay = None
+
 
 def make_click_through(tk_window):
     """Overlay ko OS level pe click-through + no-activate bana deta hai
@@ -225,10 +231,13 @@ class ScreenSharer:
         except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError):
             log("Controller disconnected")
         finally:
+            global _active_overlay
             self._control_conn_alive = False
             self._set_input_blocked(False)
             if self.overlay:
                 self.overlay.close()
+                if _active_overlay is self.overlay:
+                    _active_overlay = None
             try:
                 conn.close()
             except Exception:
@@ -291,18 +300,31 @@ class ScreenSharer:
                 self._execute_command(cmd)
 
     def _execute_command(self, cmd):
+        global _active_overlay
         action = cmd.get("action")
         try:
             if action == "identify":
-                # Pehle yahan ek badge/circle dikhaya jata tha controller ka
-                # naam batane ke liye - lekin asal OS cursor already move
-                # ho raha hota hai controller ke commands se, isliye badge
-                # + real cursor dono sath dikhna "do mouse" jaisa confusing
-                # lagta tha. Ab sirf input block karo, extra badge mat dikhao.
+                name = cmd.get("name", "?")
+                badge_text = name[0].upper()
+                # Pehle purani (kisi bhi wajah se reh gayi) overlay window
+                # hamesha destroy kar do - taake kabhi 2 badges ek sath na
+                # dikhein, sirf ek hi (current session ka) rahe.
+                if _active_overlay is not None and _active_overlay is not self.overlay:
+                    _active_overlay.close()
+                    _active_overlay = None
+                if self.overlay is None:
+                    self.overlay = CursorOverlay(self.main_root, badge_text)
+                    _active_overlay = self.overlay
+                else:
+                    self.overlay.set_text(badge_text)
+                # Controller connect ho gaya - ab sharer ka apna mouse/keyboard
+                # block kar do taake dono ka input ek dusre se na takraye.
                 self._set_input_blocked(True)
 
             elif action == "move":
                 pyautogui.moveTo(cmd["x"], cmd["y"], duration=0)
+                if self.overlay:
+                    self.overlay.move_to(cmd["x"], cmd["y"])
 
             elif action == "click":
                 pyautogui.click(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
@@ -323,8 +345,11 @@ class ScreenSharer:
             log(f"Control execution error for cmd={cmd}: {e}")
 
     def stop(self):
+        global _active_overlay
         self.running = False
         self._control_conn_alive = False
         self._set_input_blocked(False)
         if self.overlay:
             self.overlay.close()
+            if _active_overlay is self.overlay:
+                _active_overlay = None
