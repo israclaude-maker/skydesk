@@ -260,7 +260,8 @@ class ScreenViewer:
         self._send_command({"action": "click", "x": x, "y": y, "button": button})
 
     def _on_scroll(self, event):
-        self._send_command({"action": "scroll", "amount": event.delta})
+        x, y = self._scale_coords(event.x, event.y)
+        self._send_command({"action": "scroll", "amount": event.delta, "x": x, "y": y})
 
     def _on_key(self, event):
         keysym = event.keysym.lower()

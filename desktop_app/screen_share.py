@@ -322,14 +322,25 @@ class ScreenSharer:
                 self._set_input_blocked(True)
 
             elif action == "move":
-                pyautogui.moveTo(cmd["x"], cmd["y"], duration=0)
+                # Sirf hover/move par asal Windows cursor mat hilao - warna
+                # sharer ka cursor hamesha controller ke pichhe "khichta"
+                # dikhta hai, jab controller sirf point kar raha ho, click
+                # na kare. Sirf badge move karo taake sharer ko controller
+                # ki position ka visual andaza ho, bina unka asal cursor
+                # disturb kiye. Asal cursor sirf click/scroll ke waqt hilega.
                 if self.overlay:
                     self.overlay.move_to(cmd["x"], cmd["y"])
 
             elif action == "click":
+                # Click ke waqt hi asal cursor us jagah move karo (click
+                # khud is coordinate par hoga) - yehi ek moment hai jahan
+                # sharer ka cursor real action ki wajah se move hota hai.
                 pyautogui.click(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
 
             elif action == "scroll":
+                x, y = cmd.get("x"), cmd.get("y")
+                if x is not None and y is not None:
+                    pyautogui.moveTo(x, y, duration=0)
                 pyautogui.scroll(cmd["amount"])
 
             elif action == "key":
