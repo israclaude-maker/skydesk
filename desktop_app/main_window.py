@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog
 from ws_client import WSClient
 from debug_log import log
 
@@ -13,15 +13,12 @@ class MainWindow:
         self.root.title("SkyDesk - Dashboard")
         self.root.state("zoomed")
 
-        # Title
         tk.Label(root, text="SkyDesk", font=("Arial", 20, "bold")).pack(pady=15)
 
-        # Welcome message
         tk.Label(
             root, text=f"Welcome, {user_data['username']}!", font=("Arial", 12)
         ).pack(pady=5)
 
-        # Own Remote ID display box
         id_frame = tk.Frame(root, bg="#e3f2fd", relief="groove", bd=2)
         id_frame.pack(pady=20, padx=30, fill="x")
 
@@ -36,11 +33,9 @@ class MainWindow:
             fg="#1976D2",
         ).pack(pady=(0, 10))
 
-        # Online status
         self.status_label = tk.Label(root, text="🟡 Connecting...", font=("Arial", 10))
         self.status_label.pack(pady=5)
 
-        # Separator
         tk.Label(root, text="─" * 40, fg="gray").pack(pady=10)
 
         # Connect to another user section
@@ -54,6 +49,12 @@ class MainWindow:
         self.remote_id_entry.pack(pady=5)
         self.remote_id_entry.insert(0, "SKY-XXXXXX")
 
+        tk.Label(root, text="Access PIN (optional - unattended access)", font=("Arial", 9), fg="gray").pack()
+        self.pin_entry = tk.Entry(
+            root, width=20, font=("Arial", 12), justify="center", show="•"
+        )
+        self.pin_entry.pack(pady=5)
+
         tk.Button(
             root,
             text="Connect",
@@ -64,10 +65,17 @@ class MainWindow:
             font=("Arial", 10, "bold"),
         ).pack(pady=15)
 
+        # Unattended access PIN settings (apna khud ka PIN)
+        tk.Button(
+            root,
+            text="Set / Change My Access PIN",
+            command=self.open_pin_dialog,
+            width=25,
+        ).pack(pady=5)
+
         # Logout button
         tk.Button(root, text="Logout", command=self.logout, width=15).pack(pady=5)
 
-        # WebSocket connect karo
         self.ws_client = WSClient(self.token, self.handle_ws_message)
         self.ws_client.set_status_callback(self.update_connection_status)
         self.ws_client.connect()
@@ -84,8 +92,24 @@ class MainWindow:
             messagebox.showwarning("Warning", "Please enter a valid Remote ID")
             return
 
-        self.ws_client.send_connect_request(target_id)
+        pin = self.pin_entry.get().strip() or None
+        self.ws_client.send_connect_request(target_id, pin=pin)
         messagebox.showinfo("Request Sent", f"Connection request sent to {target_id}")
+
+    def open_pin_dialog(self):
+        pin = simpledialog.askstring(
+            "Set Access PIN",
+            "Naya PIN enter karo (4+ digits, sirf numbers).\n"
+            "Khali chhod kar OK karo agar PIN remove karna ho:",
+            show="•",
+        )
+        if pin is None:
+            return  # Cancel
+        pin = pin.strip()
+        if pin and not pin.isdigit():
+            messagebox.showerror("Invalid PIN", "PIN sirf numbers ka hona chahiye.")
+            return
+        self.ws_client.send_set_pin(pin)
 
     def handle_ws_message(self, data):
         log(f"WS message received: {data.get('type')}")
@@ -149,6 +173,15 @@ class MainWindow:
             sharer.start()
             log("ScreenSharer.start() returned successfully")
             messagebox.showinfo("Sharing Started", "Your screen is now being shared!")
+
+        elif msg_type == "pin_set_ok":
+            if data.get("cleared"):
+                messagebox.showinfo("PIN Removed", "Access PIN remove ho gaya.")
+            else:
+                messagebox.showinfo("PIN Saved", "Access PIN save ho gaya.")
+
+        elif msg_type == "pin_set_error":
+            messagebox.showerror("PIN Error", data.get("message", "PIN save nahi hua"))
 
         elif msg_type == "error":
             messagebox.showerror("Error", data.get("message", "Unknown error"))

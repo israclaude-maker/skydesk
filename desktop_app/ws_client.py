@@ -6,7 +6,6 @@ from config import WS_PRESENCE_URL
 
 
 def get_local_ip():
-    """Apna LAN IP nikalo (agar sharer/viewer same network pe hon toh ye tez chalega)."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -49,7 +48,6 @@ class WSClient:
 
     def _on_message(self, ws, message):
         data = json.loads(message)
-        # Callback ko UI thread ki taraf bhej rahe hain
         self.on_message_callback(data)
 
     def _on_error(self, ws, error):
@@ -60,8 +58,10 @@ class WSClient:
     def _on_close(self, ws, close_status_code, close_msg):
         print("WebSocket closed")
 
-    def send_connect_request(self, target_remote_id):
+    def send_connect_request(self, target_remote_id, pin=None):
         message = {"type": "id_connect_request", "target_remote_id": target_remote_id}
+        if pin:
+            message["pin"] = pin
         if self.ws:
             self.ws.send(json.dumps(message))
 
@@ -79,6 +79,12 @@ class WSClient:
             "type": "id_connect_reject",
             "requester_remote_id": requester_remote_id,
         }
+        if self.ws:
+            self.ws.send(json.dumps(message))
+
+    def send_set_pin(self, pin):
+        """pin='' bhejne se PIN clear/remove ho jata hai."""
+        message = {"type": "set_access_pin", "pin": pin}
         if self.ws:
             self.ws.send(json.dumps(message))
 
