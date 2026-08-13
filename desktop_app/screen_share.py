@@ -130,10 +130,30 @@ class ScreenSharer:
         self.overlay = None
         self.cmd_queue = queue.Queue()
         self._control_conn_alive = False
+        self._input_blocked = False
+
+    def _set_input_blocked(self, blocked):
+        """Sharer ka apna physical mouse/keyboard block/unblock karta hai,
+        taake controller ke commands ke sath overlap na ho. Sirf hardware
+        input block hota hai - hamare apne pyautogui commands (isi process
+        se aa rahe) is process ke andar hi chalte rehte hain."""
+        if blocked == self._input_blocked:
+            return
+        try:
+            result = user32.BlockInput(blocked)
+            self._input_blocked = blocked
+            log(f"BlockInput({blocked}) -> {result}")
+        except Exception as e:
+            log(f"BlockInput({blocked}) failed: {e}")
 
     def start(self):
         log(f"ScreenSharer.start() called for session={self.session_id} via relay {RELAY_WS_URL}")
         self.running = True
+        # Sharer ka apna physical mouse/keyboard block kar do - taake sirf
+        # controller (viewer) ka mouse chale, dono ka mouse ek sath fight
+        # na kare. Windows khud Ctrl+Alt+Del pe hamesha input unblock kar
+        # deta hai (safety net), isliye sharer kabhi permanently lock nahi hoti.
+        self._set_input_blocked(True)
         threading.Thread(target=self._run_screen_channel, daemon=True).start()
         threading.Thread(target=self._run_control_channel, daemon=True).start()
         threading.Thread(target=self._command_worker, daemon=True).start()
@@ -206,6 +226,7 @@ class ScreenSharer:
             log("Controller disconnected")
         finally:
             self._control_conn_alive = False
+            self._set_input_blocked(False)
             if self.overlay:
                 self.overlay.close()
             try:
@@ -279,6 +300,9 @@ class ScreenSharer:
                     self.overlay = CursorOverlay(self.main_root, badge_text)
                 else:
                     self.overlay.set_text(badge_text)
+                # Controller connect ho gaya - ab sharer ka apna mouse/keyboard
+                # block kar do taake dono ka input ek dusre se na takraye.
+                self._set_input_blocked(True)
 
             elif action == "move":
                 pyautogui.moveTo(cmd["x"], cmd["y"], duration=0)
@@ -306,5 +330,6 @@ class ScreenSharer:
     def stop(self):
         self.running = False
         self._control_conn_alive = False
+        self._set_input_blocked(False)
         if self.overlay:
             self.overlay.close()
