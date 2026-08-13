@@ -332,16 +332,29 @@ class ScreenSharer:
                     self.overlay.move_to(cmd["x"], cmd["y"])
 
             elif action == "click":
-                # Click ke waqt hi asal cursor us jagah move karo (click
-                # khud is coordinate par hoga) - yehi ek moment hai jahan
-                # sharer ka cursor real action ki wajah se move hota hai.
+                # Click se pehle sharer ka asal cursor kahan tha, yaad rakho -
+                # click ke turant baad wahin wapas bhej denge, taake sharer
+                # ka cursor hamesha wahin dikhe jahan usne last chhoda tha,
+                # chahe controller kitni bhi clicks kar le.
+                try:
+                    home = pyautogui.position()
+                except Exception:
+                    home = None
                 pyautogui.click(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
+                if home is not None:
+                    pyautogui.moveTo(home.x, home.y, duration=0)
 
             elif action == "scroll":
                 x, y = cmd.get("x"), cmd.get("y")
+                try:
+                    home = pyautogui.position()
+                except Exception:
+                    home = None
                 if x is not None and y is not None:
                     pyautogui.moveTo(x, y, duration=0)
                 pyautogui.scroll(cmd["amount"])
+                if home is not None:
+                    pyautogui.moveTo(home.x, home.y, duration=0)
 
             elif action == "key":
                 pyautogui.press(cmd["key"])
