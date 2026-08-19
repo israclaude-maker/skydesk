@@ -147,14 +147,14 @@ class ScreenViewer:
         if self.canvas and self.status_text_id:
             self.canvas.itemconfig(
                 self.status_text_id,
-                text="Connect nahi ho saka. Sharer offline ho sakta hai ya VPS relay down hai."
+                text="Could not connect. The other user may be offline or the relay server is down."
             )
         messagebox.showerror(
             "Connection Failed",
-            "Remote screen se connect nahi ho paya.\n\n"
-            "Check karo:\n"
-            "- Doosra user abhi bhi online hai\n"
-            "- Internet connection theek hai"
+            "Could not connect to the remote screen.\n\n"
+            "Please check:\n"
+            "- The other user is still online\n"
+            "- Your internet connection is working"
         )
 
     def _on_resize(self, event):

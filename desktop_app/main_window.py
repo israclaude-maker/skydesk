@@ -4,6 +4,24 @@ from ws_client import WSClient
 from debug_log import log
 
 
+class Theme:
+    BG = "#eef1f8"
+    CARD_BG = "#ffffff"
+    ACCENT = "#2196F3"
+    ACCENT_DARK = "#1565C0"
+    ACCENT_HOVER = "#1E88E5"
+    GREEN = "#43A047"
+    GREEN_HOVER = "#388E3C"
+    FIELD_BG = "#f4f6fa"
+    FIELD_BORDER = "#e2e6ee"
+    FIELD_FOCUS = "#2196F3"
+    TEXT_MUTED = "#8b93a3"
+    TEXT_LABEL = "#4a5061"
+    ONLINE = "#2e7d32"
+    OFFLINE = "#c62828"
+    CONNECTING = "#f9a825"
+
+
 class MainWindow:
     def __init__(self, root, token, user_data):
         self.root = root
@@ -11,106 +29,150 @@ class MainWindow:
         self.user_data = user_data
 
         self.root.title("SkyDesk - Dashboard")
+        self.root.configure(bg=Theme.BG)
         self.root.state("zoomed")
 
-        tk.Label(root, text="SkyDesk", font=("Arial", 20, "bold")).pack(pady=15)
+        # ---- Scrollable-ish centered container ----
+        container = tk.Frame(self.root, bg=Theme.BG)
+        container.pack(expand=True, fill="both")
+
+        content = tk.Frame(container, bg=Theme.BG)
+        content.place(relx=0.5, rely=0.5, anchor="center", width=520)
+
+        # ---- Header ----
+        tk.Label(
+            content, text="SkyDesk", font=("Segoe UI", 26, "bold"),
+            bg=Theme.BG, fg=Theme.ACCENT_DARK
+        ).pack(pady=(0, 2))
+        tk.Label(
+            content, text=f"Welcome back, {user_data['username']}",
+            font=("Segoe UI", 11), bg=Theme.BG, fg=Theme.TEXT_MUTED
+        ).pack(pady=(0, 18))
+
+        # ---- Remote ID card ----
+        id_card = tk.Frame(content, bg=Theme.CARD_BG, highlightbackground=Theme.FIELD_BORDER, highlightthickness=1)
+        id_card.pack(fill="x", pady=(0, 14))
 
         tk.Label(
-            root, text=f"Welcome, {user_data['username']}!", font=("Arial", 12)
-        ).pack(pady=5)
-
-        id_frame = tk.Frame(root, bg="#e3f2fd", relief="groove", bd=2)
-        id_frame.pack(pady=20, padx=30, fill="x")
-
+            id_card, text="YOUR REMOTE ID", font=("Segoe UI", 9, "bold"),
+            bg=Theme.CARD_BG, fg=Theme.TEXT_MUTED
+        ).pack(pady=(18, 2))
         tk.Label(
-            id_frame, text="Your Remote ID", font=("Arial", 10), bg="#e3f2fd"
-        ).pack(pady=(10, 0))
-        tk.Label(
-            id_frame,
-            text=user_data["remote_id"],
-            font=("Arial", 18, "bold"),
-            bg="#e3f2fd",
-            fg="#1976D2",
+            id_card, text=user_data["remote_id"], font=("Segoe UI", 22, "bold"),
+            bg=Theme.CARD_BG, fg=Theme.ACCENT_DARK
         ).pack(pady=(0, 10))
 
-        self.status_label = tk.Label(root, text="🟡 Connecting...", font=("Arial", 10))
-        self.status_label.pack(pady=5)
-
-        tk.Label(root, text="─" * 40, fg="gray").pack(pady=10)
-
-        # Connect to another user section
-        tk.Label(root, text="Connect to Remote ID", font=("Arial", 11, "bold")).pack(
-            pady=(5, 5)
+        self.status_label = tk.Label(
+            id_card, text="\u25CF Connecting...", font=("Segoe UI", 9, "bold"),
+            bg=Theme.CARD_BG, fg=Theme.CONNECTING
         )
+        self.status_label.pack(pady=(0, 16))
 
-        self.remote_id_entry = tk.Entry(
-            root, width=20, font=("Arial", 12), justify="center"
+        # ---- Connect to remote ID card ----
+        connect_card = tk.Frame(content, bg=Theme.CARD_BG, highlightbackground=Theme.FIELD_BORDER, highlightthickness=1)
+        connect_card.pack(fill="x", pady=(0, 14))
+
+        tk.Label(
+            connect_card, text="Connect to a Remote ID", font=("Segoe UI", 12, "bold"),
+            bg=Theme.CARD_BG, fg=Theme.TEXT_LABEL
+        ).pack(pady=(20, 12))
+
+        self.remote_id_entry = self._add_centered_field(connect_card, placeholder="SKY-XXXXXX")
+
+        tk.Label(
+            connect_card, text="Access PIN (optional - for unattended access)",
+            font=("Segoe UI", 9), bg=Theme.CARD_BG, fg=Theme.TEXT_MUTED
+        ).pack(pady=(4, 0))
+        self.pin_entry = self._add_centered_field(connect_card, show="\u2022")
+
+        self.connect_btn = tk.Button(
+            connect_card, text="Connect", command=self.connect_request,
+            bg=Theme.GREEN, fg="white", font=("Segoe UI", 11, "bold"),
+            relief="flat", bd=0, cursor="hand2", activebackground=Theme.GREEN_HOVER,
+            activeforeground="white"
         )
-        self.remote_id_entry.pack(pady=5)
-        self.remote_id_entry.insert(0, "SKY-XXXXXX")
+        self.connect_btn.pack(fill="x", padx=40, pady=(16, 20), ipady=10)
+        self.connect_btn.bind("<Enter>", lambda e: self.connect_btn.config(bg=Theme.GREEN_HOVER))
+        self.connect_btn.bind("<Leave>", lambda e: self.connect_btn.config(bg=Theme.GREEN))
 
-        tk.Label(root, text="Access PIN (optional - unattended access)", font=("Arial", 9), fg="gray").pack()
-        self.pin_entry = tk.Entry(
-            root, width=20, font=("Arial", 12), justify="center", show="•"
-        )
-        self.pin_entry.pack(pady=5)
+        # ---- Actions ----
+        actions = tk.Frame(content, bg=Theme.BG)
+        actions.pack(fill="x", pady=(4, 0))
 
-        tk.Button(
-            root,
-            text="Connect",
-            command=self.connect_request,
-            width=20,
-            bg="#4CAF50",
-            fg="white",
-            font=("Arial", 10, "bold"),
-        ).pack(pady=15)
-
-        # Unattended access PIN settings (apna khud ka PIN)
-        tk.Button(
-            root,
-            text="Set / Change My Access PIN",
-            command=self.open_pin_dialog,
-            width=25,
-        ).pack(pady=5)
-
-        # Logout button
-        tk.Button(root, text="Logout", command=self.logout, width=15).pack(pady=5)
+        self._secondary_button(actions, "Set / Change My Access PIN", self.open_pin_dialog).pack(fill="x", pady=(0, 8))
+        self._secondary_button(actions, "Logout", self.logout, danger=True).pack(fill="x")
 
         self.ws_client = WSClient(self.token, self.handle_ws_message)
         self.ws_client.set_status_callback(self.update_connection_status)
         self.ws_client.connect()
 
+    # ---------------------------------------------------------------
+    # UI helpers
+    # ---------------------------------------------------------------
+    def _add_centered_field(self, parent, placeholder=None, show=None):
+        wrap = tk.Frame(parent, bg=Theme.FIELD_BG, highlightthickness=1, highlightbackground=Theme.FIELD_BORDER, highlightcolor=Theme.FIELD_FOCUS)
+        wrap.pack(padx=40, pady=6, fill="x")
+        entry = tk.Entry(
+            wrap, font=("Segoe UI", 12), justify="center", relief="flat",
+            bg=Theme.FIELD_BG, bd=0, highlightthickness=0
+        )
+        if show:
+            entry.config(show=show)
+        entry.pack(fill="x", ipady=8)
+        entry.bind("<FocusIn>", lambda e: wrap.config(highlightbackground=Theme.FIELD_FOCUS))
+        entry.bind("<FocusOut>", lambda e: wrap.config(highlightbackground=Theme.FIELD_BORDER))
+        if placeholder:
+            entry.insert(0, placeholder)
+        return entry
+
+    def _secondary_button(self, parent, text, command, danger=False):
+        fg = "#c62828" if danger else Theme.ACCENT_DARK
+        btn = tk.Button(
+            parent, text=text, command=command,
+            bg=Theme.CARD_BG, fg=fg, font=("Segoe UI", 10, "bold"),
+            relief="flat", bd=0, cursor="hand2",
+            highlightbackground=Theme.FIELD_BORDER, highlightthickness=1
+        )
+        btn.pack_configure(ipady=9)
+        return btn
+
+    # ---------------------------------------------------------------
+    # Connection status
+    # ---------------------------------------------------------------
     def update_connection_status(self, connected):
         if connected:
-            self.status_label.config(text="🟢 Online", fg="green")
+            self.status_label.config(text="\u25CF Online", fg=Theme.ONLINE)
         else:
-            self.status_label.config(text="🔴 Disconnected", fg="red")
+            self.status_label.config(text="\u25CF Disconnected", fg=Theme.OFFLINE)
 
     def connect_request(self):
         target_id = self.remote_id_entry.get().strip()
         if not target_id or target_id == "SKY-XXXXXX":
-            messagebox.showwarning("Warning", "Please enter a valid Remote ID")
+            messagebox.showwarning("Missing Remote ID", "Please enter a valid Remote ID.")
             return
 
         pin = self.pin_entry.get().strip() or None
         self.ws_client.send_connect_request(target_id, pin=pin)
-        messagebox.showinfo("Request Sent", f"Connection request sent to {target_id}")
+        messagebox.showinfo("Request Sent", f"Connection request sent to {target_id}.")
 
     def open_pin_dialog(self):
         pin = simpledialog.askstring(
             "Set Access PIN",
-            "Naya PIN enter karo (4+ digits, sirf numbers).\n"
-            "Khali chhod kar OK karo agar PIN remove karna ho:",
-            show="•",
+            "Enter a new PIN (4+ digits, numbers only).\n"
+            "Leave blank and click OK to remove the PIN:",
+            show="\u2022",
         )
         if pin is None:
-            return  # Cancel
+            return  # Cancelled
         pin = pin.strip()
         if pin and not pin.isdigit():
-            messagebox.showerror("Invalid PIN", "PIN sirf numbers ka hona chahiye.")
+            messagebox.showerror("Invalid PIN", "The PIN must contain numbers only.")
             return
         self.ws_client.send_set_pin(pin)
 
+    # ---------------------------------------------------------------
+    # WebSocket message handling
+    # ---------------------------------------------------------------
     def handle_ws_message(self, data):
         log(f"WS message received: {data.get('type')}")
         self.root.after(0, self._process_message_safe, data)
@@ -145,8 +207,8 @@ class MainWindow:
         elif msg_type == "id_connect_accept":
             session_id = data.get("session_id")
             messagebox.showinfo(
-                "Accepted",
-                f"{data.get('from_remote_id')} accepted! Connecting to screen...",
+                "Request Accepted",
+                f"{data.get('from_remote_id')} accepted your request. Connecting to the screen...",
             )
             log(f"id_connect_accept received, session_id={session_id} - starting ScreenViewer")
             from screen_view import ScreenViewer
@@ -159,7 +221,7 @@ class MainWindow:
 
         elif msg_type == "id_connect_reject":
             messagebox.showinfo(
-                "Rejected", f"{data.get('from_remote_id')} rejected your request."
+                "Request Declined", f"{data.get('from_remote_id')} declined your connection request."
             )
         elif msg_type == "session_start":
             session_id = data.get("session_id")
@@ -172,23 +234,25 @@ class MainWindow:
             )
             sharer.start()
             log("ScreenSharer.start() returned successfully")
-            messagebox.showinfo("Sharing Started", "Your screen is now being shared!")
+            messagebox.showinfo("Sharing Started", "Your screen is now being shared.")
 
         elif msg_type == "pin_set_ok":
             if data.get("cleared"):
-                messagebox.showinfo("PIN Removed", "Access PIN remove ho gaya.")
+                messagebox.showinfo("PIN Removed", "Your access PIN has been removed.")
             else:
-                messagebox.showinfo("PIN Saved", "Access PIN save ho gaya.")
+                messagebox.showinfo("PIN Saved", "Your access PIN has been saved.")
 
         elif msg_type == "pin_set_error":
-            messagebox.showerror("PIN Error", data.get("message", "PIN save nahi hua"))
+            messagebox.showerror("PIN Error", data.get("message", "Failed to save the PIN."))
 
         elif msg_type == "error":
-            messagebox.showerror("Error", data.get("message", "Unknown error"))
+            messagebox.showerror("Error", data.get("message", "An unknown error occurred."))
 
     def logout(self):
+        confirm = messagebox.askyesno("Logout", "Are you sure you want to log out?")
+        if not confirm:
+            return
         self.ws_client.close()
-        messagebox.showinfo("Logout", "Logout ho gaye!")
         self.root.destroy()
 
 
