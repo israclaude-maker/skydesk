@@ -243,7 +243,7 @@ class MainWindow:
         tk.Label(cc, text="Connect to a remote computer", font=("Segoe UI", 12, "bold"),
                  bg=Theme.CARD_BG, fg=Theme.TEXT_PRIMARY).pack(pady=(22, 16), padx=28, anchor="w")
 
-        self.remote_id_entry = self._add_input_row(cc, placeholder="SKY-XXXXXX")
+        self.remote_id_entry = self._add_remote_id_input(cc)
 
         self.pin_toggle = tk.Label(
             cc, text="+ Use an access PIN", font=("Segoe UI", 9), bg=Theme.CARD_BG,
@@ -295,6 +295,28 @@ class MainWindow:
     # ---------------------------------------------------------------
     # UI helpers
     # ---------------------------------------------------------------
+    def _add_remote_id_input(self, parent):
+        """Connect-to field with a fixed, non-editable 'SKY-' prefix so the
+        user can only type/edit the numeric part of the ID."""
+        wrap = tk.Frame(parent, bg=Theme.FIELD_BG, highlightthickness=1,
+                         highlightbackground=Theme.FIELD_BORDER, highlightcolor=Theme.FIELD_FOCUS)
+        wrap.pack(padx=28, fill="x")
+
+        prefix = tk.Label(
+            wrap, text="SKY-", font=("Consolas", 12, "bold"), bg=Theme.FIELD_BG,
+            fg=Theme.TEXT_MUTED
+        )
+        prefix.pack(side="left", padx=(12, 0), ipady=9)
+
+        entry = tk.Entry(
+            wrap, font=("Consolas", 12), relief="flat", bg=Theme.FIELD_BG,
+            fg=Theme.TEXT_PRIMARY, insertbackground=Theme.TEXT_PRIMARY, bd=0, highlightthickness=0
+        )
+        entry.pack(side="left", fill="x", expand=True, padx=(2, 12), ipady=9)
+        entry.bind("<FocusIn>", lambda e: wrap.config(highlightbackground=Theme.FIELD_FOCUS))
+        entry.bind("<FocusOut>", lambda e: wrap.config(highlightbackground=Theme.FIELD_BORDER))
+        return entry
+
     def _add_input_row(self, parent, placeholder=None, show=None, label=None):
         if label:
             tk.Label(parent, text=label, font=("Segoe UI", 8, "bold"), bg=Theme.CARD_BG,
@@ -384,6 +406,8 @@ class MainWindow:
         return card
 
     def _connect_to_recent(self, target_id):
+        if target_id.upper().startswith("SKY-"):
+            target_id = target_id[4:]
         self.remote_id_entry.delete(0, tk.END)
         self.remote_id_entry.insert(0, target_id)
         self.connect_request()
@@ -398,10 +422,11 @@ class MainWindow:
             self.status_pill.config(text="  \u25CF  Disconnected  ", bg=Theme.OFFLINE_BG, fg=Theme.OFFLINE)
 
     def connect_request(self):
-        target_id = self.remote_id_entry.get().strip()
-        if not target_id or target_id == "SKY-XXXXXX":
+        typed_id = self.remote_id_entry.get().strip()
+        if not typed_id:
             messagebox.showwarning("Missing Remote ID", "Please enter a valid Remote ID.")
             return
+        target_id = typed_id if typed_id.upper().startswith("SKY-") else f"SKY-{typed_id}"
 
         pin = self.pin_entry.get().strip() or None
         self.ws_client.send_connect_request(target_id, pin=pin)
