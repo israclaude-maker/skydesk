@@ -449,6 +449,8 @@ class MainWindow:
         confirm = messagebox.askyesno("Logout", "Are you sure you want to log out?")
         if not confirm:
             return
+        from session_store import clear_session
+        clear_session()
         self.ws_client.close()
         self.root.destroy()
 

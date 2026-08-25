@@ -1,8 +1,13 @@
 import tkinter as tk
 from tkinter import messagebox
 import requests
-from config import LOGIN_URL
+from config import LOGIN_URL, ME_URL
 from main_window import MainWindow
+from session_store import (
+    get_remember_me, save_remember_me,
+    get_session, save_session, clear_session,
+    get_recent_users,
+)
 
 
 def center_window(win, width, height):
@@ -58,15 +63,26 @@ class LoginWindow:
 
         self.pw_visible = False
 
+        # Try auto-login with a saved session token first.
+        if self._try_auto_login():
+            return
+
+        self.recent_users = get_recent_users()
+
         outer = tk.Frame(self.root, bg=Theme.BG)
         outer.place(relx=0.5, rely=0.5, anchor="center")
 
         card_w, card_h = 400, 520
+
+        if self.recent_users:
+            self.recent_panel = self._build_recent_panel(outer, card_h)
+            self.recent_panel.pack(side="left", padx=(0, 18), anchor="n")
+
         self.canvas = tk.Canvas(
             outer, width=card_w + 16, height=card_h + 16,
             bg=Theme.BG, highlightthickness=0
         )
-        self.canvas.pack()
+        self.canvas.pack(side="left")
 
         round_rect(self.canvas, 10, 12, card_w + 10, card_h + 12, radius=22, fill=Theme.SHADOW, outline="")
         round_rect(self.canvas, 4, 4, card_w + 4, card_h + 4, radius=22, fill=Theme.CARD_BG, outline=Theme.FIELD_BORDER)
@@ -74,11 +90,21 @@ class LoginWindow:
         card = tk.Frame(self.canvas, bg=Theme.CARD_BG)
         self.canvas.create_window((card_w + 8) / 2, (card_h + 8) / 2, window=card, width=card_w - 20, height=card_h - 20)
 
-        tk.Label(card, text="SkyDesk", font=("Segoe UI", 25, "bold"), bg=Theme.CARD_BG, fg=Theme.ACCENT_DARK).pack(pady=(42, 4))
-        tk.Label(card, text="Sign in to continue", font=("Segoe UI", 10), bg=Theme.CARD_BG, fg=Theme.TEXT_MUTED).pack(pady=(0, 28))
+        tk.Label(card, text="SkyDesk", font=("Segoe UI", 25, "bold"), bg=Theme.CARD_BG, fg=Theme.ACCENT_DARK).pack(pady=(30, 4))
+        tk.Label(card, text="Sign in to continue", font=("Segoe UI", 10), bg=Theme.CARD_BG, fg=Theme.TEXT_MUTED).pack(pady=(0, 20))
 
         self.username_entry = self._add_field(card, "Username")
         self.password_entry, self.pw_toggle_btn = self._add_password_field(card, "Password")
+
+        self.remember_var = tk.BooleanVar(value=False)
+        remember_row = tk.Frame(card, bg=Theme.CARD_BG)
+        remember_row.pack(fill="x", padx=40, pady=(0, 4))
+        tk.Checkbutton(
+            remember_row, text="Remember me", variable=self.remember_var,
+            bg=Theme.CARD_BG, fg=Theme.TEXT_LABEL, font=("Segoe UI", 9),
+            activebackground=Theme.CARD_BG, selectcolor=Theme.CARD_BG,
+            cursor="hand2"
+        ).pack(anchor="w")
 
         self.status_label = tk.Label(card, text="", fg=Theme.ERROR, bg=Theme.CARD_BG, font=("Segoe UI", 9), wraplength=320, justify="center")
         self.status_label.pack(pady=(6, 4))
@@ -99,9 +125,95 @@ class LoginWindow:
             relief="flat", bd=0, cursor="hand2"
         ).pack()
 
-        self.username_entry.focus_set()
+        # Prefill remembered credentials
+        saved_username, saved_password = get_remember_me()
+        if saved_username:
+            self.username_entry.insert(0, saved_username)
+            self.remember_var.set(True)
+        if saved_password:
+            self.password_entry.insert(0, saved_password)
+
+        if saved_username:
+            self.password_entry.focus_set()
+        else:
+            self.username_entry.focus_set()
         self.password_entry.bind("<Return>", lambda e: self.login())
 
+    # ---------------------------------------------------------------
+    # Auto-login using a saved session token
+    # ---------------------------------------------------------------
+    def _try_auto_login(self):
+        token, user = get_session()
+        if not token or not user:
+            return False
+        try:
+            resp = requests.get(
+                ME_URL, headers={"Authorization": f"Token {token}"}, timeout=8
+            )
+            if resp.status_code == 200:
+                self.root.destroy()
+                self.open_main_window(token, user)
+                return True
+        except requests.exceptions.RequestException:
+            pass
+        clear_session()
+        return False
+
+    # ---------------------------------------------------------------
+    # Recent users side panel (AnyDesk-style)
+    # ---------------------------------------------------------------
+    def _build_recent_panel(self, parent, card_h):
+        panel = tk.Frame(
+            parent, bg=Theme.CARD_BG, width=200, height=card_h + 16,
+            highlightthickness=1, highlightbackground=Theme.FIELD_BORDER
+        )
+        panel.pack_propagate(False)
+
+        tk.Label(
+            panel, text="Recent Users", font=("Segoe UI", 10, "bold"),
+            bg=Theme.CARD_BG, fg=Theme.TEXT_LABEL
+        ).pack(anchor="w", padx=16, pady=(18, 8))
+
+        for user in self.recent_users:
+            username = user.get("username", "")
+            row = tk.Frame(panel, bg=Theme.CARD_BG, cursor="hand2")
+            row.pack(fill="x", padx=10, pady=3)
+
+            avatar = tk.Canvas(row, width=32, height=32, bg=Theme.CARD_BG, highlightthickness=0)
+            avatar.pack(side="left", padx=(4, 8), pady=6)
+            round_rect(avatar, 0, 0, 32, 32, radius=16, fill=Theme.ACCENT, outline="")
+            initial = username[:1].upper() if username else "?"
+            avatar.create_text(16, 16, text=initial, font=("Segoe UI", 11, "bold"), fill="white")
+
+            text_col = tk.Frame(row, bg=Theme.CARD_BG)
+            text_col.pack(side="left", fill="x", expand=True, pady=6)
+            tk.Label(
+                text_col, text=username, font=("Segoe UI", 9, "bold"),
+                bg=Theme.CARD_BG, fg=Theme.TEXT_LABEL, anchor="w"
+            ).pack(fill="x")
+            if user.get("remote_id"):
+                tk.Label(
+                    text_col, text=user["remote_id"], font=("Segoe UI", 8),
+                    bg=Theme.CARD_BG, fg=Theme.TEXT_MUTED, anchor="w"
+                ).pack(fill="x")
+
+            click_targets = [row, avatar, text_col] + text_col.winfo_children()
+            for widget in click_targets:
+                widget.bind("<Button-1>", lambda e, u=username: self._select_recent_user(u))
+
+            row.bind("<Enter>", lambda e, r=row: r.config(bg=Theme.FIELD_BG))
+            row.bind("<Leave>", lambda e, r=row: r.config(bg=Theme.CARD_BG))
+
+        return panel
+
+    def _select_recent_user(self, username):
+        self.username_entry.delete(0, tk.END)
+        self.username_entry.insert(0, username)
+        self.password_entry.focus_set()
+
+    # ---------------------------------------------------------------
+    # Field builders (unchanged)
+    # ---------------------------------------------------------------
     def _add_field(self, parent, label_text):
         tk.Label(parent, text=label_text, font=("Segoe UI", 9), bg=Theme.CARD_BG, fg=Theme.TEXT_LABEL, anchor="w").pack(fill="x", padx=40)
         wrap = tk.Frame(parent, bg=Theme.FIELD_BG, highlightthickness=1, highlightbackground=Theme.FIELD_BORDER, highlightcolor=Theme.FIELD_FOCUS)
@@ -173,6 +285,10 @@ class LoginWindow:
                 data = response.json()
                 token = data["token"]
                 user = data["user"]
+
+                save_remember_me(username, password, self.remember_var.get())
+                save_session(token, user)
+
                 self.root.destroy()
                 self.open_main_window(token, user)
                 return
