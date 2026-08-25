@@ -26,6 +26,7 @@ def _default_data():
         "saved_username": "",
         "saved_password": "",
         "recent_users": [],
+        "recent_connections": [],
     }
 
 
@@ -126,3 +127,25 @@ def add_recent_user(user_data):
 def get_recent_users():
     data = _load_data()
     return data.get("recent_users", [])
+
+
+# ---------------------------------------------------------------
+# Recent connections (remote IDs this user has connected to)
+# ---------------------------------------------------------------
+def add_recent_connection(target_id):
+    if not target_id:
+        return
+    data = _load_data()
+    recent = data.get("recent_connections", [])
+    recent = [r for r in recent if r.get("target_id") != target_id]
+    recent.insert(0, {
+        "target_id": target_id,
+        "last_connected": datetime.now(timezone.utc).isoformat(),
+    })
+    data["recent_connections"] = recent[:6]
+    _save_data(data)
+
+
+def get_recent_connections():
+    data = _load_data()
+    return data.get("recent_connections", [])

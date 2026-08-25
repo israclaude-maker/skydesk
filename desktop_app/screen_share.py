@@ -127,6 +127,62 @@ class CursorOverlay:
             self.window = None
 
 
+class BorderOverlay:
+    """Sharer ki screen ke edges par blue border dikhata hai jab tak
+    sharing chal rahi hai (Zoom-style). Click-through hai, kabhi bhi
+    mouse/keyboard input intercept nahi karega."""
+
+    def __init__(self, main_root):
+        self.main_root = main_root
+        self.window = None
+        self.main_root.after(0, self._create)
+
+    def _create(self):
+        self.window = tk.Toplevel(self.main_root)
+        self.window.overrideredirect(True)
+        self.window.attributes("-topmost", True)
+
+        try:
+            with mss.mss() as sct:
+                mon = sct.monitors[1]
+            width, height = mon["width"], mon["height"]
+        except Exception:
+            width = self.window.winfo_screenwidth()
+            height = self.window.winfo_screenheight()
+        self.window.geometry(f"{width}x{height}+0+0")
+
+        transparent_key = "#123456"
+        self.window.configure(bg=transparent_key)
+        try:
+            self.window.attributes("-transparentcolor", transparent_key)
+        except tk.TclError:
+            pass
+
+        canvas = tk.Canvas(self.window, width=width, height=height, bg=transparent_key, highlightthickness=0)
+        canvas.pack(fill="both", expand=True)
+
+        thickness = 6
+        canvas.create_rectangle(
+            thickness // 2, thickness // 2,
+            width - thickness // 2, height - thickness // 2,
+            outline="#2196F3", width=thickness
+        )
+
+        self.window.update_idletasks()
+        try:
+            make_click_through(self.window)
+        except Exception as e:
+            log(f"BorderOverlay click-through style failed: {e}")
+
+    def close(self):
+        self.main_root.after(0, self._close)
+
+    def _close(self):
+        if self.window:
+            self.window.destroy()
+            self.window = None
+
+
 class ScreenSharer:
     def __init__(self, main_root, session_id, username="Sharer"):
         self.main_root = main_root
@@ -134,6 +190,7 @@ class ScreenSharer:
         self.username = username
         self.running = False
         self.overlay = None
+        self.border_overlay = None
         self.cmd_queue = queue.Queue()
         self._control_conn_alive = False
         self._input_blocked = False
@@ -160,6 +217,7 @@ class ScreenSharer:
         # na kare. Windows khud Ctrl+Alt+Del pe hamesha input unblock kar
         # deta hai (safety net), isliye sharer kabhi permanently lock nahi hoti.
         self._set_input_blocked(True)
+        self.border_overlay = BorderOverlay(self.main_root)
         threading.Thread(target=self._run_screen_channel, daemon=True).start()
         threading.Thread(target=self._run_control_channel, daemon=True).start()
         threading.Thread(target=self._command_worker, daemon=True).start()
@@ -238,6 +296,9 @@ class ScreenSharer:
                 self.overlay.close()
                 if _active_overlay is self.overlay:
                     _active_overlay = None
+            if self.border_overlay:
+                self.border_overlay.close()
+                self.border_overlay = None
             try:
                 conn.close()
             except Exception:
@@ -377,3 +438,6 @@ class ScreenSharer:
             self.overlay.close()
             if _active_overlay is self.overlay:
                 _active_overlay = None
+        if self.border_overlay:
+            self.border_overlay.close()
+            self.border_overlay = None

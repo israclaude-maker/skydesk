@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import messagebox
 from ws_client import WSClient
 from debug_log import log
+from session_store import add_recent_connection, get_recent_connections
 
 
 def round_rect(canvas, x1, y1, x2, y2, radius=16, **kwargs):
@@ -264,6 +265,11 @@ class MainWindow:
         self.connect_btn.bind("<Enter>", lambda e: self.connect_btn.config(bg=Theme.ACCENT_HOVER))
         self.connect_btn.bind("<Leave>", lambda e: self.connect_btn.config(bg=Theme.ACCENT))
 
+        # ---- Recent sessions (previously connected remote IDs) ----
+        recent_card = self._build_recent_sessions_section(content)
+        if recent_card:
+            recent_card.pack(pady=(0, 16))
+
         # ---- Actions row ----
         actions = tk.Frame(content, bg=Theme.BG)
         actions.pack(fill="x")
@@ -333,10 +339,54 @@ class MainWindow:
         return btn
 
     def _copy_remote_id(self):
+        remote_id = self.user_data["remote_id"]
+        if remote_id.upper().startswith("SKY-"):
+            remote_id = remote_id[4:]
         self.root.clipboard_clear()
-        self.root.clipboard_append(self.user_data["remote_id"])
+        self.root.clipboard_append(remote_id)
         self.copy_btn.config(text="  Copied!", fg=Theme.ONLINE)
         self.root.after(1500, lambda: self.copy_btn.config(text="  Copy", fg=Theme.ACCENT_HOVER))
+
+    def _build_recent_sessions_section(self, parent):
+        self.recent_connections = get_recent_connections()
+        if not self.recent_connections:
+            return None
+
+        card = RoundedCard(parent, width=540, height=112, radius=18)
+        rc = card.content
+
+        tk.Label(rc, text="Recent Sessions", font=("Segoe UI", 11, "bold"),
+                 bg=Theme.CARD_BG, fg=Theme.TEXT_PRIMARY).pack(pady=(16, 8), padx=24, anchor="w")
+
+        tiles_row = tk.Frame(rc, bg=Theme.CARD_BG)
+        tiles_row.pack(padx=24, anchor="w")
+
+        for conn in self.recent_connections[:6]:
+            target_id = conn.get("target_id", "")
+            tile = tk.Frame(
+                tiles_row, bg=Theme.FIELD_BG, cursor="hand2", width=82, height=58,
+                highlightthickness=1, highlightbackground=Theme.FIELD_BORDER
+            )
+            tile.pack_propagate(False)
+            tile.pack(side="left", padx=(0, 10))
+
+            icon = tk.Canvas(tile, width=26, height=26, bg=Theme.FIELD_BG, highlightthickness=0)
+            icon.pack(pady=(8, 2))
+            round_rect(icon, 1, 1, 25, 25, radius=7, fill=Theme.ACCENT, outline="")
+
+            label = tk.Label(tile, text=target_id, font=("Consolas", 8, "bold"),
+                              bg=Theme.FIELD_BG, fg=Theme.TEXT_PRIMARY)
+            label.pack()
+
+            for widget in (tile, icon, label):
+                widget.bind("<Button-1>", lambda e, tid=target_id: self._connect_to_recent(tid))
+
+        return card
+
+    def _connect_to_recent(self, target_id):
+        self.remote_id_entry.delete(0, tk.END)
+        self.remote_id_entry.insert(0, target_id)
+        self.connect_request())
 
     # ---------------------------------------------------------------
     # Connection status
@@ -355,7 +405,8 @@ class MainWindow:
 
         pin = self.pin_entry.get().strip() or None
         self.ws_client.send_connect_request(target_id, pin=pin)
-        messagebox.showinfo("Request Sent", f"Connection request sent to {target_id}.")
+        add_recent_connection(target_id)
+        messagebox.showinfo("Request Sent", f"Connection request sent to {target_id}.")arget_id}.")
 
     def open_pin_dialog(self):
         dialog = PinDialog(self.root)

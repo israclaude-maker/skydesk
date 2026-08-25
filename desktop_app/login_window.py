@@ -6,7 +6,6 @@ from main_window import MainWindow
 from session_store import (
     get_remember_me, save_remember_me,
     get_session, save_session, clear_session,
-    get_recent_users,
 )
 
 
@@ -67,16 +66,10 @@ class LoginWindow:
         if self._try_auto_login():
             return
 
-        self.recent_users = get_recent_users()
-
         outer = tk.Frame(self.root, bg=Theme.BG)
         outer.place(relx=0.5, rely=0.5, anchor="center")
 
         card_w, card_h = 400, 520
-
-        if self.recent_users:
-            self.recent_panel = self._build_recent_panel(outer, card_h)
-            self.recent_panel.pack(side="left", padx=(0, 18), anchor="n")
 
         self.canvas = tk.Canvas(
             outer, width=card_w + 16, height=card_h + 16,
@@ -154,63 +147,15 @@ class LoginWindow:
                 self.root.destroy()
                 self.open_main_window(token, user)
                 return True
+            elif resp.status_code in (401, 403):
+                # Server says this token is genuinely invalid/expired.
+                clear_session()
+            # Any other status code: leave the saved session alone.
         except requests.exceptions.RequestException:
+            # Network/server unreachable right now - don't wipe the saved
+            # session just because of a temporary connectivity issue.
             pass
-        clear_session()
         return False
-
-    # ---------------------------------------------------------------
-    # Recent users side panel (AnyDesk-style)
-    # ---------------------------------------------------------------
-    def _build_recent_panel(self, parent, card_h):
-        panel = tk.Frame(
-            parent, bg=Theme.CARD_BG, width=200, height=card_h + 16,
-            highlightthickness=1, highlightbackground=Theme.FIELD_BORDER
-        )
-        panel.pack_propagate(False)
-
-        tk.Label(
-            panel, text="Recent Users", font=("Segoe UI", 10, "bold"),
-            bg=Theme.CARD_BG, fg=Theme.TEXT_LABEL
-        ).pack(anchor="w", padx=16, pady=(18, 8))
-
-        for user in self.recent_users:
-            username = user.get("username", "")
-            row = tk.Frame(panel, bg=Theme.CARD_BG, cursor="hand2")
-            row.pack(fill="x", padx=10, pady=3)
-
-            avatar = tk.Canvas(row, width=32, height=32, bg=Theme.CARD_BG, highlightthickness=0)
-            avatar.pack(side="left", padx=(4, 8), pady=6)
-            round_rect(avatar, 0, 0, 32, 32, radius=16, fill=Theme.ACCENT, outline="")
-            initial = username[:1].upper() if username else "?"
-            avatar.create_text(16, 16, text=initial, font=("Segoe UI", 11, "bold"), fill="white")
-
-            text_col = tk.Frame(row, bg=Theme.CARD_BG)
-            text_col.pack(side="left", fill="x", expand=True, pady=6)
-            tk.Label(
-                text_col, text=username, font=("Segoe UI", 9, "bold"),
-                bg=Theme.CARD_BG, fg=Theme.TEXT_LABEL, anchor="w"
-            ).pack(fill="x")
-            if user.get("remote_id"):
-                tk.Label(
-                    text_col, text=user["remote_id"], font=("Segoe UI", 8),
-                    bg=Theme.CARD_BG, fg=Theme.TEXT_MUTED, anchor="w"
-                ).pack(fill="x")
-
-            click_targets = [row, avatar, text_col] + text_col.winfo_children()
-            for widget in click_targets:
-                widget.bind("<Button-1>", lambda e, u=username: self._select_recent_user(u))
-
-            row.bind("<Enter>", lambda e, r=row: r.config(bg=Theme.FIELD_BG))
-            row.bind("<Leave>", lambda e, r=row: r.config(bg=Theme.CARD_BG))
-
-        return panel
-
-    def _select_recent_user(self, username):
-        self.username_entry.delete(0, tk.END)
-        self.username_entry.insert(0, username)
-        self.password_entry.focus_set()
-
     # ---------------------------------------------------------------
     # Field builders (unchanged)
     # ---------------------------------------------------------------
