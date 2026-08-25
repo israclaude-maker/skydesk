@@ -386,7 +386,7 @@ class MainWindow:
     def _connect_to_recent(self, target_id):
         self.remote_id_entry.delete(0, tk.END)
         self.remote_id_entry.insert(0, target_id)
-        self.connect_request())
+        self.connect_request()
 
     # ---------------------------------------------------------------
     # Connection status
@@ -406,7 +406,7 @@ class MainWindow:
         pin = self.pin_entry.get().strip() or None
         self.ws_client.send_connect_request(target_id, pin=pin)
         add_recent_connection(target_id)
-        messagebox.showinfo("Request Sent", f"Connection request sent to {target_id}.")arget_id}.")
+        messagebox.showinfo("Request Sent", f"Connection request sent to {target_id}.")
 
     def open_pin_dialog(self):
         dialog = PinDialog(self.root)
@@ -421,6 +421,18 @@ class MainWindow:
     # ---------------------------------------------------------------
     # WebSocket message handling
     # ---------------------------------------------------------------
+    def _bring_to_front(self):
+        """Pull the app window to the foreground so incoming request/status
+        dialogs are visible even if the user is working in another app."""
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+            self.root.after(300, lambda: self.root.attributes("-topmost", False))
+            self.root.focus_force()
+        except Exception:
+            pass
+
     def handle_ws_message(self, data):
         log(f"WS message received: {data.get('type')}")
         self.root.after(0, self._process_message_safe, data)
@@ -438,6 +450,7 @@ class MainWindow:
                 pass
 
     def _process_message(self, data):
+        self._bring_to_front()
         msg_type = data.get("type")
 
         if msg_type == "id_connect_request":

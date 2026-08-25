@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
-hiddenimports = ['websocket', 'websocket._app', 'websocket._core', 'pyautogui', 'pymsgbox', 'pytweening', 'pyscreeze', 'pygetwindow', 'mouseinfo', 'mss', 'mss.windows']
+hiddenimports = ['websocket', 'websocket._app', 'websocket._core', 'pyautogui', 'pymsgbox', 'pytweening', 'pyscreeze', 'pygetwindow', 'mouseinfo', 'mss', 'mss.windows', 'main_window', 'register_window', 'screen_share', 'screen_view', 'session_store', 'ws_client', 'debug_log', 'config']
 tmp_ret = collect_all('websocket')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('pyautogui')
