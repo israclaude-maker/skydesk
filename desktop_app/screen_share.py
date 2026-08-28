@@ -194,6 +194,7 @@ class ScreenSharer:
         self.cmd_queue = queue.Queue()
         self._control_conn_alive = False
         self._input_blocked = False
+        self._dragging = False
 
     def _set_input_blocked(self, blocked):
         """Sharer ka apna physical mouse/keyboard block/unblock karta hai,
@@ -388,7 +389,10 @@ class ScreenSharer:
                 # dikhta hai, jab controller sirf point kar raha ho, click
                 # na kare. Sirf badge move karo taake sharer ko controller
                 # ki position ka visual andaza ho, bina unka asal cursor
-                # disturb kiye. Asal cursor sirf click/scroll ke waqt hilega.
+                # disturb kiye. Asal cursor sirf click/scroll/drag ke waqt
+                # hilega.
+                if self._dragging:
+                    pyautogui.moveTo(cmd["x"], cmd["y"], duration=0)
                 if self.overlay:
                     self.overlay.move_to(cmd["x"], cmd["y"])
 
@@ -404,6 +408,14 @@ class ScreenSharer:
                 pyautogui.click(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
                 if home is not None:
                     pyautogui.moveTo(home.x, home.y, duration=0)
+
+            elif action == "mouse_down":
+                pyautogui.mouseDown(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
+                self._dragging = True
+
+            elif action == "mouse_up":
+                pyautogui.mouseUp(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
+                self._dragging = False
 
             elif action == "scroll":
                 x, y = cmd.get("x"), cmd.get("y")

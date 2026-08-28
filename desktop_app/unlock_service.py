@@ -1,103 +1,102 @@
 """
 SkyDesk Unlock Service
-Runs as a Windows Service (SYSTEM account) so it can interact with the
-secure Winlogon desktop even when no one is logged in. Listens on a
-local named pipe for unlock requests from the main SkyDesk app.
+=======================
+SYSTEM ke tor pe Session 0 mein chalti hai. Session 0 Windows Vista se
+isolated hai user ki interactive session (Session 1+) se - isliye ye
+service kabhi seedha user ka Winlogon/lock-screen desktop access nahi
+kar sakti, chahe SYSTEM ho ya kuch bhi (yehi Session 0 isolation ka
+maqsad hai - services ko login UI se chhed-chhaad karne se rokna).
+
+Asal fix: ek SYSTEM token banao jo target session ke sath "tagged" ho,
+aur usi se ek chhota helper (SkyDeskSessionHelper.exe) us session ke
+andar launch karo. Chunki helper asal mein usi session/window-station
+mein rehta hai jahan lock screen hai, wo Winlogon open kar sakta hai.
+(Yehi trick PsExec -s -i jaise tools use karte hain.)
 
 Requires: pip install pywin32
 """
+import os
 import sys
 import time
 import json
-import ctypes
-import ctypes.wintypes as wt
+import base64
 
 import win32serviceutil
 import win32service
 import win32event
 import win32pipe
 import win32file
+import win32security
+import win32process
+import win32profile
+import win32con
+import win32ts
+import win32api
 import servicemanager
 
 PIPE_NAME = r'\\.\pipe\SkyDeskUnlock'
 
-user32 = ctypes.windll.user32
 
-DESKTOP_GENERIC_ALL = 0x10000000
-GENERIC_ALL = 0x10000000
-INPUT_KEYBOARD = 1
-KEYEVENTF_UNICODE = 0x0004
-KEYEVENTF_KEYUP = 0x0002
-
-
-class KEYBDINPUT(ctypes.Structure):
-    _fields_ = [
-        ("wVk", wt.WORD),
-        ("wScan", wt.WORD),
-        ("dwFlags", wt.DWORD),
-        ("time", wt.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(wt.ULONG)),
-    ]
+def _enable_privilege(htoken, name):
+    try:
+        priv_id = win32security.LookupPrivilegeValue(None, name)
+        win32security.AdjustTokenPrivileges(htoken, False, [(priv_id, win32security.SE_PRIVILEGE_ENABLED)])
+    except Exception:
+        pass
 
 
-class INPUT(ctypes.Structure):
-    class _I(ctypes.Union):
-        _fields_ = [("ki", KEYBDINPUT)]
-    _anonymous_ = ("_i",)
-    _fields_ = [("type", wt.DWORD), ("_i", _I)]
-
-
-def _send_unicode_char(ch, key_up=False):
-    extra = ctypes.pointer(wt.ULONG(0))
-    flags = KEYEVENTF_UNICODE | (KEYEVENTF_KEYUP if key_up else 0)
-    ki = KEYBDINPUT(0, ord(ch), flags, 0, extra)
-    inp = INPUT(INPUT_KEYBOARD, ki)
-    user32.SendInput(1, ctypes.pointer(inp), ctypes.sizeof(INPUT))
-
-
-def _send_vk(vk, key_up=False):
-    extra = ctypes.pointer(wt.ULONG(0))
-    flags = KEYEVENTF_KEYUP if key_up else 0
-    ki = KEYBDINPUT(vk, 0, flags, 0, extra)
-    inp = INPUT(INPUT_KEYBOARD, ki)
-    user32.SendInput(1, ctypes.pointer(inp), ctypes.sizeof(INPUT))
-
-
-VK_RETURN = 0x0D
-
-
-def type_password_and_enter(password):
-    """Attaches this thread to the secure Winlogon desktop and types the
-    password followed by Enter."""
-    hdesk = user32.OpenDesktopW(
-        "Winlogon", 0, False, DESKTOP_GENERIC_ALL
+def _system_token_for_session(session_id):
+    """Is (SYSTEM) process ka token duplicate karke, target session id se
+    re-tag karta hai - taake isse launch hone wala process Session 0 ke
+    isolated window station ki bajaye us session ke andar lande."""
+    hproc = win32api.GetCurrentProcess()
+    htok = win32security.OpenProcessToken(
+        hproc,
+        win32con.TOKEN_DUPLICATE | win32con.TOKEN_QUERY | win32con.TOKEN_ADJUST_PRIVILEGES
     )
-    if not hdesk:
-        return False, "OpenDesktop(Winlogon) failed"
+    for priv in ("SeTcbPrivilege", "SeAssignPrimaryTokenPrivilege", "SeIncreaseQuotaPrivilege"):
+        _enable_privilege(htok, priv)
 
-    if not user32.SetThreadDesktop(hdesk):
-        return False, "SetThreadDesktop failed"
+    dup = win32security.DuplicateTokenEx(
+        htok, win32security.SecurityImpersonation,
+        win32con.TOKEN_ALL_ACCESS, win32security.TokenPrimary, None
+    )
+    win32security.SetTokenInformation(dup, win32security.TokenSessionId, session_id)
+    return dup
 
-    time.sleep(0.5)  # give the lock screen a moment to render
 
-    for ch in password:
-        _send_unicode_char(ch, key_up=False)
-        _send_unicode_char(ch, key_up=True)
-        time.sleep(0.02)
+def _launch_session_helper(args):
+    """SkyDeskSessionHelper.exe ko abhi ke active console session ke
+    andar, SYSTEM ke tor pe launch karta hai. True return hone ka matlab
+    sirf itna hai ke launch call kamyab hui - helper ka action kamyab
+    hua ya nahi wo guarantee nahi karta."""
+    session_id = win32ts.WTSGetActiveConsoleSessionId()
+    if session_id in (0xFFFFFFFF, -1, None):
+        return False, "No active console session"
 
-    time.sleep(0.2)
-    _send_vk(VK_RETURN, key_up=False)
-    _send_vk(VK_RETURN, key_up=True)
+    token = _system_token_for_session(session_id)
+    env = win32profile.CreateEnvironmentBlock(token, False)
 
-    return True, "ok"
+    startup = win32process.STARTUPINFO()
+    startup.dwFlags = win32process.STARTF_USESHOWWINDOW
+    startup.wShowWindow = win32con.SW_HIDE
+
+    helper_path = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "SkyDeskSessionHelper.exe")
+    cmdline = f'"{helper_path}" {args}'
+
+    try:
+        win32process.CreateProcessAsUser(
+            token, None, cmdline, None, None, False,
+            win32con.CREATE_NEW_CONSOLE, env, None, startup
+        )
+        return True, "launched"
+    except Exception as e:
+        return False, str(e)
 
 
 def request_unlock(password):
-    """Full sequence: raise SAS to bring up the secure desktop's login
-    prompt, then type the password."""
-    user32.SendSAS(False)
-    time.sleep(1.0)
-    return type_password_and_enter(password)
+    args = base64.b64encode(password.encode("utf-8")).decode("ascii")
+    return _launch_session_helper(args)
 
 
 class SkyDeskUnlockService(win32serviceutil.ServiceFramework):
@@ -140,8 +139,7 @@ class SkyDeskUnlockService(win32serviceutil.ServiceFramework):
                     cmd = {}
 
                 if cmd.get("action") == "unlock":
-                    password = cmd.get("password", "")
-                    ok, msg = request_unlock(password)
+                    ok, msg = request_unlock(cmd.get("password", ""))
                     response = json.dumps({"ok": ok, "message": msg}).encode("utf-8")
                 else:
                     response = json.dumps({"ok": False, "message": "unknown action"}).encode("utf-8")
@@ -150,7 +148,8 @@ class SkyDeskUnlockService(win32serviceutil.ServiceFramework):
                 win32file.FlushFileBuffers(pipe)
                 win32pipe.DisconnectNamedPipe(pipe)
                 win32file.CloseHandle(pipe)
-            except Exception:
+            except Exception as e:
+                servicemanager.LogErrorMsg(f"SkyDeskUnlock loop error: {e}")
                 time.sleep(1)
 
 

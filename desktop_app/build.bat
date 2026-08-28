@@ -17,7 +17,13 @@ echo.
 echo [1.5/2] Building Unlock Service EXE...
 "C:\Python314\Scripts\pyinstaller.exe" --onefile --name SkyDeskUnlock ^
   --hidden-import=win32timezone --hidden-import=win32serviceutil --hidden-import=servicemanager ^
+  --hidden-import=win32profile --hidden-import=win32ts --hidden-import=win32security ^
   unlock_service.py
+
+echo.
+echo [1.6/2] Building Session Helper EXE...
+"C:\Python314\Scripts\pyinstaller.exe" --onefile --windowed --name SkyDeskSessionHelper ^
+  session_helper.py
 
 echo.
 echo [2/2] Building Installer with Inno Setup...

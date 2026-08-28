@@ -21,6 +21,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "dist\SkyDesk.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dist\SkyDeskUnlock.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\SkyDeskSessionHelper.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\SkyDesk"; Filename: "{app}\SkyDesk.exe"
