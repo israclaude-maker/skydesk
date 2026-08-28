@@ -38,6 +38,7 @@ class ScreenViewer:
 
     CONNECT_RETRIES = 15
     CONNECT_RETRY_DELAY = 1
+    FRAME_POLL_MS = 33  # ~30fps GUI refresh cap, independent of network arrival rate
 
     def __init__(self, session_id, my_username="User"):
         self.session_id = session_id
@@ -57,6 +58,15 @@ class ScreenViewer:
         self.remote_height = None
         self._photo_ref = None
 
+        # Latest-frame-only buffer: the network thread overwrites this as
+        # fast as frames arrive; the GUI polls it at a fixed rate. This
+        # prevents thousands of stale after() callbacks from piling up if
+        # the window is minimized/backgrounded for a while (e.g. the user
+        # steps away for a few minutes) - old frames are simply dropped
+        # instead of queued, so there's no backlog to "catch up" on.
+        self._frame_lock = threading.Lock()
+        self._pending_frame = None
+
     def start(self):
         log(f"ScreenViewer starting for session={self.session_id} via relay {RELAY_WS_URL}")
         self.window = tk.Toplevel()
@@ -73,13 +83,22 @@ class ScreenViewer:
         )
 
         self.canvas.bind("<Motion>", self._on_mouse_move)
-        self.canvas.bind("<Button-1>", lambda e: self._on_click(e, "left"))
+        self.canvas.bind("<ButtonPress-1>", lambda e: self._on_mouse_down(e, "left"))
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", lambda e: self._on_mouse_up(e, "left"))
         self.canvas.bind("<Button-3>", lambda e: self._on_click(e, "right"))
         self.canvas.bind("<MouseWheel>", self._on_scroll)
         self.window.bind("<Key>", self._on_key)
         self.window.bind("<Configure>", self._on_resize)
         self.canvas.focus_set()
         self.window.protocol("WM_DELETE_WINDOW", self.stop)
+
+        self.unlock_btn = tk.Button(
+            self.window, text="\U0001F512 Unlock Remote PC", command=self._prompt_unlock,
+            bg="#2196F3", fg="white", font=("Segoe UI", 9, "bold"),
+            relief="flat", bd=0, cursor="hand2"
+        )
+        self.unlock_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=10)
 
         self.window.update_idletasks()
         self.window.state("zoomed")
@@ -90,6 +109,9 @@ class ScreenViewer:
         self.running = True
         threading.Thread(target=self._connect_screen_stream, daemon=True).start()
         threading.Thread(target=self._connect_control, daemon=True).start()
+
+        # Start the fixed-rate GUI poll loop (main thread only).
+        self.window.after(self.FRAME_POLL_MS, self._poll_frame)
 
     def _connect_relay(self, channel):
         last_error = None
@@ -129,12 +151,18 @@ class ScreenViewer:
                     continue
 
                 img = Image.open(BytesIO(frame_data))
+                img.load()  # decode now, off the GUI thread
 
                 if self.remote_width is None:
                     self.remote_width, self.remote_height = img.size
                     log(f"Remote resolution detected from frame: {self.remote_width}x{self.remote_height}")
 
-                self.window.after(0, self._update_image, img)
+                # Just overwrite the pending frame - never queue. If the GUI
+                # thread hasn't had a chance to render the previous one yet
+                # (e.g. window was backgrounded), it gets dropped instead of
+                # piling up.
+                with self._frame_lock:
+                    self._pending_frame = img
         except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError):
             log("Sharer disconnected")
         finally:
@@ -142,6 +170,22 @@ class ScreenViewer:
                 sock.close()
             except Exception:
                 pass
+
+    def _poll_frame(self):
+        """Runs on the main/GUI thread at a fixed rate. Renders the latest
+        available frame, if any, then reschedules itself. This decouples
+        rendering from network arrival rate so we never build a backlog."""
+        if not self.running:
+            return
+
+        with self._frame_lock:
+            img = self._pending_frame
+            self._pending_frame = None
+
+        if img is not None:
+            self._update_image(img)
+
+        self.window.after(self.FRAME_POLL_MS, self._poll_frame)
 
     def _connection_failed(self):
         if self.canvas and self.status_text_id:
@@ -259,6 +303,18 @@ class ScreenViewer:
         x, y = self._scale_coords(event.x, event.y)
         self._send_command({"action": "click", "x": x, "y": y, "button": button})
 
+    def _on_mouse_down(self, event, button):
+        x, y = self._scale_coords(event.x, event.y)
+        self._send_command({"action": "mouse_down", "x": x, "y": y, "button": button})
+
+    def _on_drag(self, event):
+        x, y = self._scale_coords(event.x, event.y)
+        self._send_command({"action": "move", "x": x, "y": y})
+
+    def _on_mouse_up(self, event, button):
+        x, y = self._scale_coords(event.x, event.y)
+        self._send_command({"action": "mouse_up", "x": x, "y": y, "button": button})
+
     def _on_scroll(self, event):
         x, y = self._scale_coords(event.x, event.y)
         self._send_command({"action": "scroll", "amount": event.delta, "x": x, "y": y})
@@ -269,6 +325,45 @@ class ScreenViewer:
             self._send_command({"action": "key", "key": self.KEY_MAP[keysym]})
         elif len(event.char) == 1 and event.char.isprintable():
             self._send_command({"action": "type", "text": event.char})
+
+    def _prompt_unlock(self):
+        dialog = tk.Toplevel(self.window)
+        dialog.title("Unlock Remote PC")
+        dialog.configure(bg="#ffffff")
+        dialog.resizable(False, False)
+        dialog.transient(self.window)
+        dialog.grab_set()
+
+        pad = tk.Frame(dialog, bg="#ffffff")
+        pad.pack(padx=24, pady=20)
+
+        tk.Label(
+            pad, text="Enter the remote PC's password", font=("Segoe UI", 11, "bold"),
+            bg="#ffffff"
+        ).pack(anchor="w", pady=(0, 10))
+
+        entry = tk.Entry(pad, font=("Segoe UI", 11), show="*", width=28)
+        entry.pack(fill="x", ipady=6)
+        entry.focus_set()
+
+        def submit():
+            password = entry.get()
+            dialog.destroy()
+            if password:
+                self._send_command({"action": "unlock_request", "password": password})
+
+        entry.bind("<Return>", lambda e: submit())
+
+        btn_row = tk.Frame(pad, bg="#ffffff")
+        btn_row.pack(fill="x", pady=(14, 0))
+        tk.Button(btn_row, text="Cancel", command=dialog.destroy).pack(side="left", expand=True, fill="x", padx=(0, 4))
+        tk.Button(btn_row, text="Unlock", command=submit, bg="#2196F3", fg="white").pack(side="left", expand=True, fill="x", padx=(4, 0))
+
+        dialog.update_idletasks()
+        w, h = dialog.winfo_width(), dialog.winfo_height()
+        x = self.window.winfo_x() + (self.window.winfo_width() - w) // 2
+        y = self.window.winfo_y() + (self.window.winfo_height() - h) // 2
+        dialog.geometry(f"+{x}+{y}")
 
     def stop(self):
         self.running = False
