@@ -20,6 +20,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "dist\SkyDesk.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\SkyDeskUnlock.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\SkyDesk"; Filename: "{app}\SkyDesk.exe"
@@ -29,8 +30,13 @@ Name: "{group}\Uninstall SkyDesk"; Filename: "{uninstallexe}"
 [Run]
 Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""SkyDesk Screen"" dir=in action=allow protocol=TCP localport=9001 program=""{app}\SkyDesk.exe"" enable=yes"; Flags: runhidden
 Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""SkyDesk Control"" dir=in action=allow protocol=TCP localport=9002 program=""{app}\SkyDesk.exe"" enable=yes"; Flags: runhidden
+Filename: "{app}\SkyDeskUnlock.exe"; Parameters: "install"; Flags: runhidden
+Filename: "sc"; Parameters: "config SkyDeskUnlock start= auto"; Flags: runhidden
+Filename: "sc"; Parameters: "start SkyDeskUnlock"; Flags: runhidden
 Filename: "{app}\SkyDesk.exe"; Description: "Launch SkyDesk"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SkyDesk Screen"""; Flags: runhidden
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""SkyDesk Control"""; Flags: runhidden
+Filename: "sc"; Parameters: "stop SkyDeskUnlock"; Flags: runhidden
+Filename: "{app}\SkyDeskUnlock.exe"; Parameters: "remove"; Flags: runhidden
