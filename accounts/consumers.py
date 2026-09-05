@@ -4,6 +4,9 @@ import uuid
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
+from django.utils import timezone
+from django.db.models import Q
+from .models import ConnectionLog
 
 User = get_user_model()
 
@@ -43,6 +46,7 @@ class PresenceConsumer(AsyncWebsocketConsumer):
     async def disconnect(self, close_code):
         if hasattr(self, "user") and not self.user.is_anonymous:
             await self.set_online_status(False)
+            await self.close_all_open_logs_for_user(self.user)
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
             ONLINE_IPS.pop(self.user.remote_id, None)
 
@@ -58,6 +62,10 @@ class PresenceConsumer(AsyncWebsocketConsumer):
             await self.handle_connect_response(data, accepted=False)
         elif message_type == "set_access_pin":
             await self.handle_set_pin(data)
+        elif message_type == "check_online_status":
+            await self.handle_check_online_status(data)
+        elif message_type == "session_ended":
+            await self.handle_session_ended(data)
 
     # ---------- PIN set/change (apna khud ka PIN, apne liye) ----------
     async def handle_set_pin(self, data):
@@ -102,7 +110,7 @@ class PresenceConsumer(AsyncWebsocketConsumer):
         if submitted_pin and not self._pin_locked_out(target_remote_id):
             pin_ok = await self.verify_pin(target_user, submitted_pin)
             if pin_ok:
-                await self.auto_accept(target_remote_id)
+                await self.auto_accept(target_user)
                 return
             else:
                 self._record_failed_pin(target_remote_id)
@@ -122,7 +130,8 @@ class PresenceConsumer(AsyncWebsocketConsumer):
             },
         )
 
-    async def auto_accept(self, target_remote_id):
+    async def auto_accept(self, target_user):
+        target_remote_id = target_user.remote_id
         session_id = str(uuid.uuid4())[:8]
         sharer_ip = ONLINE_IPS.get(target_remote_id)
 
@@ -140,10 +149,13 @@ class PresenceConsumer(AsyncWebsocketConsumer):
             },
         )
 
+        await self.create_connection_log(session_id, self.user, target_user, "pin")
+
         # Requester ko batao connection ready hai
         await self.send(text_data=json.dumps({
             "type": "id_connect_accept",
             "from_remote_id": target_remote_id,
+            "from_username": target_user.username,
             "session_id": session_id,
             "role": "viewer",
             "host": sharer_ip,
@@ -160,6 +172,8 @@ class PresenceConsumer(AsyncWebsocketConsumer):
             session_id = str(uuid.uuid4())[:8]
             sharer_ip = self._get_real_client_ip()
             local_ip = data.get("local_ip")
+            requester_user = await self.get_user_by_remote_id(requester_remote_id)
+            await self.create_connection_log(session_id, requester_user, self.user, "manual")
 
         await self.channel_layer.group_send(
             f"user_{requester_remote_id}",
@@ -168,6 +182,7 @@ class PresenceConsumer(AsyncWebsocketConsumer):
                 "message": {
                     "type": "id_connect_accept" if accepted else "id_connect_reject",
                     "from_remote_id": self.user.remote_id,
+                    "from_username": self.user.username if accepted else None,
                     "session_id": session_id,
                     "role": "viewer",
                     "host": sharer_ip,
@@ -185,6 +200,19 @@ class PresenceConsumer(AsyncWebsocketConsumer):
 
     async def forward_message(self, event):
         await self.send(text_data=json.dumps(event["message"]))
+
+    async def handle_check_online_status(self, data):
+        remote_ids = data.get("remote_ids") or []
+        statuses = await self.get_online_statuses(remote_ids)
+        await self.send(text_data=json.dumps({
+            "type": "online_status_result",
+            "statuses": statuses,
+        }))
+
+    @database_sync_to_async
+    def get_online_statuses(self, remote_ids):
+        users = User.objects.filter(remote_id__in=remote_ids).values("remote_id", "is_online")
+        return {u["remote_id"]: u["is_online"] for u in users}
 
     @database_sync_to_async
     def set_online_status(self, status):
@@ -206,3 +234,40 @@ class PresenceConsumer(AsyncWebsocketConsumer):
         else:
             self.user.clear_access_pin()
         self.user.save()
+
+    # ---------- Connection logging ----------
+    async def handle_session_ended(self, data):
+        session_id = data.get("session_id")
+        if session_id:
+            await self.close_connection_log(session_id)
+
+    @database_sync_to_async
+    def create_connection_log(self, session_id, requester_user, target_user, connect_via):
+        ConnectionLog.objects.create(
+            session_id=session_id,
+            requester=requester_user,
+            target=target_user,
+            connect_via=connect_via,
+            status="ongoing",
+        )
+
+    @database_sync_to_async
+    def close_connection_log(self, session_id):
+        log = ConnectionLog.objects.filter(session_id=session_id, status="ongoing").first()
+        if log:
+            log.ended_at = timezone.now()
+            log.duration_seconds = int((log.ended_at - log.started_at).total_seconds())
+            log.status = "ended"
+            log.save()
+
+    @database_sync_to_async
+    def close_all_open_logs_for_user(self, user):
+        now = timezone.now()
+        logs = ConnectionLog.objects.filter(status="ongoing").filter(
+            Q(requester=user) | Q(target=user)
+        )
+        for log in logs:
+            log.ended_at = now
+            log.duration_seconds = int((log.ended_at - log.started_at).total_seconds())
+            log.status = "ended"
+            log.save()

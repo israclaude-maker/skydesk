@@ -1,3 +1,4 @@
+import os
 import threading
 import queue
 import time
@@ -10,6 +11,9 @@ import pyautogui
 import tkinter as tk
 import websocket
 from debug_log import log
+from file_transfer import (
+    connect_file_channel, send_file_over_channel, IncomingFileReceiver, get_received_folder
+)
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
@@ -74,6 +78,32 @@ def connect_to_relay(channel, session_id, role, retries=CONNECT_RETRIES):
             time.sleep(CONNECT_RETRY_DELAY)
     log(f"Giving up connecting to relay for channel={channel} after {retries} attempts. Last error: {last_error}")
     return None
+
+
+def _show_file_notification(main_root, text):
+    """Sharer ki screen ke top-right corner mein ek chhota, click-through,
+    khud-band-hone-wala notification dikhata hai - sharer ko kuch click
+    nahi karna padta (input already blocked hai session ke dauran)."""
+    main_root.after(0, lambda: _create_file_notification(main_root, text))
+
+
+def _create_file_notification(main_root, text):
+    win = tk.Toplevel(main_root)
+    win.overrideredirect(True)
+    win.attributes("-topmost", True)
+    win.configure(bg="#4CAF50")
+    tk.Label(
+        win, text=text, fg="white", bg="#4CAF50",
+        font=("Arial", 10, "bold"), padx=10, pady=6
+    ).pack()
+    win.update_idletasks()
+    screen_w = win.winfo_screenwidth()
+    win.geometry(f"+{screen_w - win.winfo_width() - 20}+20")
+    try:
+        make_click_through(win)
+    except Exception as e:
+        log(f"File notification click-through style failed: {e}")
+    win.after(4000, win.destroy)
 
 
 class CursorOverlay:
@@ -184,10 +214,11 @@ class BorderOverlay:
 
 
 class ScreenSharer:
-    def __init__(self, main_root, session_id, username="Sharer"):
+    def __init__(self, main_root, session_id, username="Sharer", ws_client=None):
         self.main_root = main_root
         self.session_id = session_id
         self.username = username
+        self.ws_client = ws_client
         self.running = False
         self.overlay = None
         self.border_overlay = None
@@ -195,6 +226,9 @@ class ScreenSharer:
         self._control_conn_alive = False
         self._input_blocked = False
         self._dragging = False
+
+        self.file_conn = None
+        self._file_receiver = IncomingFileReceiver()
 
     def _set_input_blocked(self, blocked):
         """Sharer ka apna physical mouse/keyboard block/unblock karta hai,
@@ -222,6 +256,7 @@ class ScreenSharer:
         threading.Thread(target=self._run_screen_channel, daemon=True).start()
         threading.Thread(target=self._run_control_channel, daemon=True).start()
         threading.Thread(target=self._command_worker, daemon=True).start()
+        threading.Thread(target=self._run_file_channel, daemon=True).start()
 
     # ---------- SCREEN STREAMING (via relay) ----------
     def _run_screen_channel(self):
@@ -334,6 +369,52 @@ class ScreenSharer:
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    # ---------- FILE TRANSFER (via relay, separate channel) ----------
+    # Poora automatic hai - sharer ko kuch click nahi karna, kyunke sharing
+    # ke dauran unka physical input already blocked hota hai. Viewer hi
+    # upload push kar sakta hai ya download request bhej sakta hai.
+    def _run_file_channel(self):
+        conn = connect_file_channel(self.session_id, "sharer")
+        if conn is None:
+            return
+        self.file_conn = conn
+        log("File channel connected (sharer side)")
+        try:
+            while self.running:
+                raw = conn.recv()
+                if not raw:
+                    continue
+                if isinstance(raw, bytes):
+                    self._file_receiver.write_chunk(raw)
+                else:
+                    self._handle_file_message(json.loads(raw), conn)
+        except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError):
+            log("File channel closed (sharer side)")
+
+    def _handle_file_message(self, msg, conn):
+        msg_type = msg.get("type")
+
+        if msg_type == "upload_start":
+            self._file_receiver.start(msg.get("filename", "file"), get_received_folder())
+        elif msg_type == "upload_end":
+            path = self._file_receiver.finish()
+            _show_file_notification(self.main_root, f"\U0001F4E5 File received: {path}")
+
+        elif msg_type == "download_request":
+            remote_path = msg.get("filename", "")
+            if remote_path and os.path.isfile(remote_path):
+                try:
+                    send_file_over_channel(conn, remote_path, "download_data_start", "download_data_end")
+                    _show_file_notification(self.main_root, f"\U0001F4E4 File sent: {os.path.basename(remote_path)}")
+                except Exception as e:
+                    log(f"Failed to send requested file: {e}")
+                    conn.send(json.dumps({"type": "download_error", "message": str(e)}))
+            else:
+                conn.send(json.dumps({
+                    "type": "download_error",
+                    "message": f"File not found: {remote_path}"
+                }))
+
     # ---------- COMMAND EXECUTION (separate worker thread) ----------
     def _command_worker(self):
         while True:
@@ -444,6 +525,11 @@ class ScreenSharer:
     def stop(self):
         global _active_overlay
         self.running = False
+        if self.ws_client:
+            try:
+                self.ws_client.send_session_ended(self.session_id)
+            except Exception:
+                pass
         self._control_conn_alive = False
         self._set_input_blocked(False)
         if self.overlay:
@@ -453,3 +539,15 @@ class ScreenSharer:
         if self.border_overlay:
             self.border_overlay.close()
             self.border_overlay = None
+        if self.file_conn:
+            try:
+                self.file_conn.close()
+            except Exception:
+                pass
+        if self.file_conn:
+            try:
+                self.file_conn.close()
+            except Exception:
+                pass
+
+

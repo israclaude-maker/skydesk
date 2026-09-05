@@ -1,12 +1,16 @@
+import os
 import threading
 import time
 import json
 from io import BytesIO
 from PIL import Image, ImageTk
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog, simpledialog
 import websocket
 from debug_log import log
+from file_transfer import (
+    connect_file_channel, send_file_over_channel, IncomingFileReceiver, get_received_folder
+)
 
 # Relay ab WebSocket (wss://) ke through, VPS ke already-open HTTPS (443)
 # port par - isliye har network isko pass hone deta hai, chahe wo sirf
@@ -40,9 +44,10 @@ class ScreenViewer:
     CONNECT_RETRY_DELAY = 1
     FRAME_POLL_MS = 33  # ~30fps GUI refresh cap, independent of network arrival rate
 
-    def __init__(self, session_id, my_username="User"):
+    def __init__(self, session_id, my_username="User", ws_client=None):
         self.session_id = session_id
         self.my_username = my_username
+        self.ws_client = ws_client
         self.running = False
         self.window = None
         self.canvas = None
@@ -67,6 +72,8 @@ class ScreenViewer:
         self._frame_lock = threading.Lock()
         self._pending_frame = None
 
+        self.file_conn = None
+        self._file_receiver = IncomingFileReceiver()
     def start(self):
         log(f"ScreenViewer starting for session={self.session_id} via relay {RELAY_WS_URL}")
         self.window = tk.Toplevel()
@@ -100,6 +107,20 @@ class ScreenViewer:
         )
         self.unlock_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=10)
 
+        self.send_file_btn = tk.Button(
+            self.window, text="\U0001F4E4 Send File", command=self._send_file_dialog,
+            bg="#4CAF50", fg="white", font=("Segoe UI", 9, "bold"),
+            relief="flat", bd=0, cursor="hand2"
+        )
+        self.send_file_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=48)
+
+        self.request_file_btn = tk.Button(
+            self.window, text="\U0001F4E5 Request File", command=self._request_file_dialog,
+            bg="#FF9800", fg="white", font=("Segoe UI", 9, "bold"),
+            relief="flat", bd=0, cursor="hand2"
+        )
+        self.request_file_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=86)
+
         self.window.update_idletasks()
         self.window.state("zoomed")
         self.window.update_idletasks()
@@ -109,6 +130,7 @@ class ScreenViewer:
         self.running = True
         threading.Thread(target=self._connect_screen_stream, daemon=True).start()
         threading.Thread(target=self._connect_control, daemon=True).start()
+        threading.Thread(target=self._connect_file_channel, daemon=True).start()
 
         # Start the fixed-rate GUI poll loop (main thread only).
         self.window.after(self.FRAME_POLL_MS, self._poll_frame)
@@ -257,6 +279,81 @@ class ScreenViewer:
             if self.window:
                 self.window.after(0, self._draw_host_cursor, x, y, name)
 
+    # ---------- FILE TRANSFER (via relay, separate channel) ----------
+    def _connect_file_channel(self):
+        conn = connect_file_channel(self.session_id, "viewer")
+        if conn is None:
+            return
+        self.file_conn = conn
+        log("Connected to sharer (file) via relay!")
+        try:
+            while self.running:
+                raw = conn.recv()
+                if not raw:
+                    continue
+                if isinstance(raw, bytes):
+                    self._file_receiver.write_chunk(raw)
+                else:
+                    self._handle_file_message(json.loads(raw))
+        except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError):
+            log("File channel closed")
+
+    def _handle_file_message(self, msg):
+        msg_type = msg.get("type")
+
+        if msg_type == "upload_start":
+            self._file_receiver.start(msg.get("filename", "file"), get_received_folder())
+        elif msg_type == "upload_end":
+            path = self._file_receiver.finish()
+            if self.window:
+                self.window.after(0, lambda: messagebox.showinfo(
+                    "File Received", f"File saved to:\n{path}"
+                ))
+
+        elif msg_type == "download_data_start":
+            self._file_receiver.start(msg.get("filename", "file"), get_received_folder())
+        elif msg_type == "download_data_end":
+            path = self._file_receiver.finish()
+            if self.window:
+                self.window.after(0, lambda: messagebox.showinfo(
+                    "Download Complete", f"File saved to:\n{path}"
+                ))
+        elif msg_type == "download_error":
+            error_msg = msg.get("message", "File not found on remote device.")
+            if self.window:
+                self.window.after(0, lambda: messagebox.showerror("Download Failed", error_msg))
+
+    def _send_file_dialog(self):
+        if not self.file_conn:
+            messagebox.showwarning("Not Connected", "File channel is not connected yet. Please wait a moment.")
+            return
+        filepath = filedialog.askopenfilename(title="Select a file to send")
+        if not filepath:
+            return
+        try:
+            threading.Thread(
+                target=send_file_over_channel,
+                args=(self.file_conn, filepath, "upload_start", "upload_end"),
+                daemon=True
+            ).start()
+            messagebox.showinfo("Sending", f"Sending '{os.path.basename(filepath)}' to the remote computer...")
+        except Exception as e:
+            messagebox.showerror("Send Failed", str(e))
+
+    def _request_file_dialog(self):
+        if not self.file_conn:
+            messagebox.showwarning("Not Connected", "File channel is not connected yet. Please wait a moment.")
+            return
+        remote_path = simpledialog.askstring(
+            "Request File",
+            "Enter the full file path on the remote computer\n(e.g. C:\\Users\\Name\\Desktop\\file.pdf):",
+            parent=self.window
+        )
+        if not remote_path:
+            return
+        self.file_conn.send(json.dumps({"type": "download_request", "filename": remote_path}))
+        messagebox.showinfo("Request Sent", "Waiting for the remote computer to send the file...")
+
     def _draw_host_cursor(self, x, y, name="Sharer"):
         if x is None or y is None or not self.remote_width or not self.remote_height:
             return
@@ -367,9 +464,19 @@ class ScreenViewer:
 
     def stop(self):
         self.running = False
+        if self.ws_client:
+            try:
+                self.ws_client.send_session_ended(self.session_id)
+            except Exception:
+                pass
         if self.control_sock:
             try:
                 self.control_sock.close()
+            except Exception:
+                pass
+        if self.file_conn:
+            try:
+                self.file_conn.close()
             except Exception:
                 pass
         if self.window:

@@ -88,6 +88,17 @@ class WSClient:
         if self.ws:
             self.ws.send(json.dumps(message))
 
+    def send_check_online_status(self, remote_ids):
+        """Ek batch me multiple remote_ids ka live online/offline status maangta hai."""
+        message = {"type": "check_online_status", "remote_ids": remote_ids}
+        if self.ws:
+            self.ws.send(json.dumps(message))
+
+    def send_session_ended(self, session_id):
+        message = {"type": "session_ended", "session_id": session_id}
+        if self.ws:
+            self.ws.send(json.dumps(message))
+
     def close(self):
         if self.ws:
             self.ws.close()

@@ -132,14 +132,16 @@ def get_recent_users():
 # ---------------------------------------------------------------
 # Recent connections (remote IDs this user has connected to)
 # ---------------------------------------------------------------
-def add_recent_connection(target_id):
+def add_recent_connection(target_id, username=None):
     if not target_id:
         return
     data = _load_data()
     recent = data.get("recent_connections", [])
+    existing = next((r for r in recent if r.get("target_id") == target_id), None)
     recent = [r for r in recent if r.get("target_id") != target_id]
     recent.insert(0, {
         "target_id": target_id,
+        "username": username or (existing.get("username", "") if existing else ""),
         "last_connected": datetime.now(timezone.utc).isoformat(),
     })
     data["recent_connections"] = recent[:6]

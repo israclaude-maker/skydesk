@@ -40,3 +40,36 @@ class CustomUser(AbstractUser):
 
     def __str__(self):
         return f"{self.username} ({self.remote_id})"
+
+
+
+from django.utils import timezone
+
+
+class ConnectionLog(models.Model):
+    CONNECT_VIA_CHOICES = [
+        ("pin", "PIN (Auto-Accept)"),
+        ("manual", "Manual Accept"),
+    ]
+    STATUS_CHOICES = [
+        ("ongoing", "Ongoing"),
+        ("ended", "Ended"),
+    ]
+
+    session_id = models.CharField(max_length=20, unique=True)
+    requester = models.ForeignKey(
+        CustomUser, related_name="initiated_connections",
+        on_delete=models.SET_NULL, null=True
+    )
+    target = models.ForeignKey(
+        CustomUser, related_name="received_connections",
+        on_delete=models.SET_NULL, null=True
+    )
+    connect_via = models.CharField(max_length=10, choices=CONNECT_VIA_CHOICES, default="manual")
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    duration_seconds = models.PositiveIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="ongoing")
+
+    def __str__(self):
+        return f"{self.requester} -> {self.target} ({self.status})"

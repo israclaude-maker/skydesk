@@ -266,13 +266,16 @@ class MainWindow:
         self.connect_btn.bind("<Leave>", lambda e: self.connect_btn.config(bg=Theme.ACCENT))
 
         # ---- Recent sessions (previously connected remote IDs) ----
-        recent_card = self._build_recent_sessions_section(content)
-        if recent_card:
-            recent_card.pack(pady=(0, 16))
+        self.recent_container = content
+        self.recent_card = None
+        self.recent_status_dots = {}
+        self.online_status = {}
+        self._refresh_recent_sessions_ui()
 
         # ---- Actions row ----
         actions = tk.Frame(content, bg=Theme.BG)
         actions.pack(fill="x")
+        self.actions = actions
 
         pin_action = self._pill_button(actions, "\u2699  Access PIN", self.open_pin_dialog,
                                         fg=Theme.TEXT_PRIMARY, border=Theme.FIELD_BORDER, hover=Theme.FIELD_BG)
@@ -374,36 +377,72 @@ class MainWindow:
         if not self.recent_connections:
             return None
 
-        card = RoundedCard(parent, width=540, height=112, radius=18)
+        shown = self.recent_connections[:6]
+        card_h = 52 + len(shown) * 54
+        card = RoundedCard(parent, width=540, height=card_h, radius=18)
         rc = card.content
 
         tk.Label(rc, text="Recent Sessions", font=("Segoe UI", 11, "bold"),
-                 bg=Theme.CARD_BG, fg=Theme.TEXT_PRIMARY).pack(pady=(16, 8), padx=24, anchor="w")
+                 bg=Theme.CARD_BG, fg=Theme.TEXT_PRIMARY).pack(pady=(16, 10), padx=24, anchor="w")
 
-        tiles_row = tk.Frame(rc, bg=Theme.CARD_BG)
-        tiles_row.pack(padx=24, anchor="w")
-
-        for conn in self.recent_connections[:6]:
+        for conn in shown:
             target_id = conn.get("target_id", "")
-            tile = tk.Frame(
-                tiles_row, bg=Theme.FIELD_BG, cursor="hand2", width=82, height=58,
-                highlightthickness=1, highlightbackground=Theme.FIELD_BORDER
+            username = conn.get("username") or "Unknown user"
+
+            row = tk.Frame(rc, bg=Theme.CARD_BG)
+            row.pack(fill="x", padx=24, pady=(0, 8))
+
+            dot = tk.Label(row, text="\u25CF", font=("Segoe UI", 10),
+                            bg=Theme.CARD_BG, fg=Theme.TEXT_MUTED)
+            dot.pack(side="left", padx=(0, 10))
+            self.recent_status_dots[target_id] = dot
+
+            info = tk.Frame(row, bg=Theme.CARD_BG)
+            info.pack(side="left", fill="x", expand=True)
+            tk.Label(info, text=target_id, font=("Consolas", 10, "bold"),
+                     bg=Theme.CARD_BG, fg=Theme.TEXT_PRIMARY, anchor="w").pack(anchor="w")
+            tk.Label(info, text=username, font=("Segoe UI", 8),
+                     bg=Theme.CARD_BG, fg=Theme.TEXT_MUTED, anchor="w").pack(anchor="w")
+
+            connect_btn = tk.Button(
+                row, text="Connect", font=("Segoe UI", 9, "bold"),
+                bg=Theme.ACCENT_SOFT, fg=Theme.ACCENT_HOVER, relief="flat", bd=0,
+                cursor="hand2", activebackground=Theme.ACCENT_SOFT, activeforeground=Theme.ACCENT_HOVER,
+                command=lambda tid=target_id: self._connect_to_recent(tid)
             )
-            tile.pack_propagate(False)
-            tile.pack(side="left", padx=(0, 10))
-
-            icon = tk.Canvas(tile, width=26, height=26, bg=Theme.FIELD_BG, highlightthickness=0)
-            icon.pack(pady=(8, 2))
-            round_rect(icon, 1, 1, 25, 25, radius=7, fill=Theme.ACCENT, outline="")
-
-            label = tk.Label(tile, text=target_id, font=("Consolas", 8, "bold"),
-                              bg=Theme.FIELD_BG, fg=Theme.TEXT_PRIMARY)
-            label.pack()
-
-            for widget in (tile, icon, label):
-                widget.bind("<Button-1>", lambda e, tid=target_id: self._connect_to_recent(tid))
+            connect_btn.pack(side="right", ipadx=10, ipady=6)
 
         return card
+
+    def _refresh_recent_sessions_ui(self):
+        if self.recent_card is not None:
+            self.recent_card.destroy()
+            self.recent_card = None
+        self.recent_status_dots = {}
+
+        card = self._build_recent_sessions_section(self.recent_container)
+        if card:
+            if hasattr(self, "actions"):
+                card.pack(pady=(0, 16), before=self.actions)
+            else:
+                card.pack(pady=(0, 16))
+        self.recent_card = card
+        self._apply_online_status_to_tiles()
+
+    def _request_online_status_for_recent(self):
+        ids = [c.get("target_id") for c in getattr(self, "recent_connections", []) if c.get("target_id")]
+        if ids and getattr(self, "ws_client", None):
+            self.ws_client.send_check_online_status(ids)
+
+    def _apply_online_status_to_tiles(self):
+        for target_id, dot_label in self.recent_status_dots.items():
+            is_online = self.online_status.get(target_id)
+            if is_online is True:
+                dot_label.config(fg=Theme.ONLINE)
+            elif is_online is False:
+                dot_label.config(fg=Theme.OFFLINE)
+            else:
+                dot_label.config(fg=Theme.TEXT_MUTED)
 
     def _connect_to_recent(self, target_id):
         if target_id.upper().startswith("SKY-"):
@@ -418,6 +457,7 @@ class MainWindow:
     def update_connection_status(self, connected):
         if connected:
             self.status_pill.config(text="  \u25CF  Online  ", bg=Theme.ONLINE_BG, fg=Theme.ONLINE)
+            self._request_online_status_for_recent()
         else:
             self.status_pill.config(text="  \u25CF  Disconnected  ", bg=Theme.OFFLINE_BG, fg=Theme.OFFLINE)
 
@@ -430,7 +470,6 @@ class MainWindow:
 
         pin = self.pin_entry.get().strip() or None
         self.ws_client.send_connect_request(target_id, pin=pin)
-        add_recent_connection(target_id)
         messagebox.showinfo("Request Sent", f"Connection request sent to {target_id}.")
 
     def open_pin_dialog(self):
@@ -492,16 +531,23 @@ class MainWindow:
 
         elif msg_type == "id_connect_accept":
             session_id = data.get("session_id")
+            target_id = data.get("from_remote_id")
+            target_username = data.get("from_username")
             messagebox.showinfo(
                 "Request Accepted",
                 f"{data.get('from_remote_id')} accepted your request. Connecting to the screen...",
             )
+            if target_id:
+                add_recent_connection(target_id, target_username)
+                self.online_status[target_id] = True
+                self._refresh_recent_sessions_ui()
             log(f"id_connect_accept received, session_id={session_id} - starting ScreenViewer")
             from screen_view import ScreenViewer
 
             viewer = ScreenViewer(
                 session_id=session_id,
-                my_username=self.user_data["username"]
+                my_username=self.user_data["username"],
+                ws_client=self.ws_client
             )
             viewer.start()
 
@@ -516,7 +562,8 @@ class MainWindow:
 
             sharer = ScreenSharer(
                 main_root=self.root, session_id=session_id,
-                username=self.user_data["username"]
+                username=self.user_data["username"],
+                ws_client=self.ws_client
             )
             sharer.start()
             log("ScreenSharer.start() returned successfully")
@@ -530,6 +577,10 @@ class MainWindow:
 
         elif msg_type == "pin_set_error":
             messagebox.showerror("PIN Error", data.get("message", "Failed to save the PIN."))
+
+        elif msg_type == "online_status_result":
+            self.online_status.update(data.get("statuses", {}))
+            self._apply_online_status_to_tiles()
 
         elif msg_type == "error":
             messagebox.showerror("Error", data.get("message", "An unknown error occurred."))
