@@ -3,7 +3,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
-hiddenimports = ['websocket', 'websocket._app', 'websocket._core', 'pyautogui', 'pymsgbox', 'pytweening', 'pyscreeze', 'pygetwindow', 'mouseinfo', 'mss', 'mss.windows', 'main_window', 'register_window', 'screen_share', 'screen_view', 'session_store', 'ws_client', 'debug_log', 'config', 'unlock_client']
+hiddenimports = ['websocket', 'websocket._app', 'websocket._core', 'pyautogui', 'pymsgbox', 'pytweening', 'pyscreeze', 'pygetwindow', 'mouseinfo', 'mss', 'mss.windows', 'main_window', 'register_window', 'screen_share', 'screen_view', 'session_store', 'ws_client', 'debug_log', 'config', 'unlock_client', 'tkinterdnd2']
 tmp_ret = collect_all('websocket')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('pyautogui')
@@ -11,6 +11,9 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('mss')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('PIL')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+tmp_ret = collect_all('tkinterdnd2')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
@@ -49,5 +52,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['SkyDesk.ico'],
-    version='version_info.txt',
 )

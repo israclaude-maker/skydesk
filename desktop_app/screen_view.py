@@ -6,6 +6,7 @@ from io import BytesIO
 from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import messagebox, filedialog, simpledialog
+from tkinterdnd2 import DND_FILES
 import websocket
 from debug_log import log
 from file_transfer import (
@@ -89,10 +90,16 @@ class ScreenViewer:
             fill="white", font=("Segoe UI", 12)
         )
 
+        # Drag & drop: OS file explorer se koi bhi file seedha is window
+        # pe drop karke bhej sakte hain, jaisa AnyDesk mein hota hai.
+        self.window.drop_target_register(DND_FILES)
+        self.window.dnd_bind("<<Drop>>", self._on_file_drop)
+
         self.canvas.bind("<Motion>", self._on_mouse_move)
         self.canvas.bind("<ButtonPress-1>", lambda e: self._on_mouse_down(e, "left"))
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", lambda e: self._on_mouse_up(e, "left"))
+        self.canvas.bind("<Leave>", lambda e: self._on_mouse_up(e, "left"))
         self.canvas.bind("<Button-3>", lambda e: self._on_click(e, "right"))
         self.canvas.bind("<MouseWheel>", self._on_scroll)
         self.window.bind("<Key>", self._on_key)
@@ -100,26 +107,19 @@ class ScreenViewer:
         self.canvas.focus_set()
         self.window.protocol("WM_DELETE_WINDOW", self.stop)
 
-        self.unlock_btn = tk.Button(
-            self.window, text="\U0001F512 Unlock Remote PC", command=self._prompt_unlock,
-            bg="#2196F3", fg="white", font=("Segoe UI", 9, "bold"),
-            relief="flat", bd=0, cursor="hand2"
-        )
-        self.unlock_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=10)
-
         self.send_file_btn = tk.Button(
             self.window, text="\U0001F4E4 Send File", command=self._send_file_dialog,
             bg="#4CAF50", fg="white", font=("Segoe UI", 9, "bold"),
             relief="flat", bd=0, cursor="hand2"
         )
-        self.send_file_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=48)
+        self.send_file_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=10)
 
         self.request_file_btn = tk.Button(
             self.window, text="\U0001F4E5 Request File", command=self._request_file_dialog,
             bg="#FF9800", fg="white", font=("Segoe UI", 9, "bold"),
             relief="flat", bd=0, cursor="hand2"
         )
-        self.request_file_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=86)
+        self.request_file_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=48)
 
         self.window.update_idletasks()
         self.window.state("zoomed")
@@ -324,11 +324,25 @@ class ScreenViewer:
                 self.window.after(0, lambda: messagebox.showerror("Download Failed", error_msg))
 
     def _send_file_dialog(self):
-        if not self.file_conn:
-            messagebox.showwarning("Not Connected", "File channel is not connected yet. Please wait a moment.")
-            return
         filepath = filedialog.askopenfilename(title="Select a file to send")
         if not filepath:
+            return
+        self._send_file(filepath)
+
+    def _on_file_drop(self, event):
+        # event.data mein ek ya zyada paths ho sakte hain, spaces wale
+        # paths curly braces {} mein wrapped aate hain - tk.splitlist
+        # ye sahi tarah parse kar deta hai.
+        paths = self.window.tk.splitlist(event.data)
+        for path in paths:
+            if os.path.isfile(path):
+                self._send_file(path)
+            else:
+                messagebox.showwarning("Not a File", f"Skipped (not a file):\n{path}")
+
+    def _send_file(self, filepath):
+        if not self.file_conn:
+            messagebox.showwarning("Not Connected", "File channel is not connected yet. Please wait a moment.")
             return
         try:
             threading.Thread(

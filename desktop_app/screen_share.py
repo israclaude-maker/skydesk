@@ -497,6 +497,7 @@ class ScreenSharer:
             elif action == "mouse_up":
                 pyautogui.mouseUp(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
                 self._dragging = False
+                pyautogui.moveTo(cmd["x"], cmd["y"], duration=0)
 
             elif action == "scroll":
                 x, y = cmd.get("x"), cmd.get("y")

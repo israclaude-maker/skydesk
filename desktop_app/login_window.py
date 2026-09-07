@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox
 import requests
+from tkinterdnd2 import TkinterDnD
 from config import LOGIN_URL, ME_URL
 from main_window import MainWindow
 from session_store import (
@@ -268,7 +269,10 @@ class LoginWindow:
         reg_root.mainloop()
 
     def open_main_window(self, token, user_data):
-        new_root = tk.Tk()
+        # TkinterDnD.Tk() (na ke plain tk.Tk()) taake iske andar khulne
+        # wali Toplevel windows (jaise remote screen viewer) drag & drop
+        # support kar sakein.
+        new_root = TkinterDnD.Tk()
         MainWindow(new_root, token, user_data)
         new_root.mainloop()
 
