@@ -73,26 +73,20 @@ class MSLLHOOKSTRUCT(ctypes.Structure):
 
 
 def click_without_moving_cursor(x, y, button="left"):
-    pt = POINT(x, y)
-    hwnd = user32.WindowFromPoint(pt)
-    if not hwnd:
-        return
-    client_pt = POINT(x, y)
-    user32.ScreenToClient(hwnd, ctypes.byref(client_pt))
-    lparam = (client_pt.y << 16) | (client_pt.x & 0xFFFF)
-
-    if button == "right":
-        wm_down, wm_up, mk = WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON
-    else:
-        wm_down, wm_up, mk = WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON
-
-    # Pehle hover/move message bhejo - kuch buttons/controls sirf tab
-    # click register karte hain jab unhe pehle "mouse over" mila ho.
-    user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
-    time.sleep(0.01)
-    user32.PostMessageW(hwnd, wm_down, mk, lparam)
-    time.sleep(0.03)
-    user32.PostMessageW(hwnd, wm_up, 0, lparam)
+    """Reliable real click - asal Windows cursor ko turant us jagah
+    le jata hai, click karta hai, phir wapas laata hai. Message-based
+    (PostMessage) click ki koshish ki thi taake cursor bilkul na hile,
+    lekin bohot saare apps/controls bina window-focus ke usay ignore
+    kar dete hain - is liye reliability ke liye real click use kar rahe
+    hain. Cursor thodi der ke liye visible move hoga, lekin click har
+    jagah kaam karega."""
+    try:
+        home = pyautogui.position()
+    except Exception:
+        home = None
+    pyautogui.click(x, y, button=button)
+    if home is not None:
+        pyautogui.moveTo(home.x, home.y, duration=0)
 
 
 class InputGuard:
