@@ -86,6 +86,13 @@ class ScreenViewer:
         self._cmd_send_queue = queue.Queue()
         self._connection_lost_shown = False
         self._modifiers_held = set()
+
+        # Drag detection ab viewer window ke apne (unscaled) pixels mein
+        # hoti hai, scaling se pehle - taake chhoti window se bari remote
+        # screen tak scale hone par hath ki halki jitter amplify ho kar
+        # false drag na trigger kare.
+        self._mouse_down_pos = None
+        self.LOCAL_DRAG_THRESHOLD = 4
     def start(self):
         log(f"ScreenViewer starting for session={self.session_id} via relay {RELAY_WS_URL}")
         self.window = tk.Toplevel()
@@ -433,8 +440,13 @@ class ScreenViewer:
     def _draw_host_cursor(self, x, y, name="Sharer"):
         if x is None or y is None or not self.remote_width or not self.remote_height:
             return
-        cx = x * (self.win_width / self.remote_width)
-        cy = y * (self.win_height / self.remote_height)
+        win_w = max(self.win_width, 100)
+        win_h = max(self.win_height, 100)
+        scale = min(win_w / self.remote_width, win_h / self.remote_height)
+        offset_x = (win_w - self.remote_width * scale) / 2
+        offset_y = (win_h - self.remote_height * scale) / 2
+        cx = offset_x + x * scale
+        cy = offset_y + y * scale
 
         if self.host_cursor_id is None:
             self.host_cursor_id = self.canvas.create_oval(
@@ -493,14 +505,24 @@ class ScreenViewer:
         self._send_command({"action": "click", "x": x, "y": y, "button": button})
 
     def _on_mouse_down(self, event, button):
+        self._mouse_down_pos = (event.x, event.y)
         x, y = self._scale_coords(event.x, event.y)
         self._send_command({"action": "mouse_down", "x": x, "y": y, "button": button})
 
     def _on_drag(self, event):
+        # Jab tak viewer window ke apne (unscaled) pixels mein itni
+        # distance na ho jaye, "move" bhejo hi mat - taake click ke
+        # waqt hath ki chhoti jitter sharer tak pahunche hi nahi.
+        if self._mouse_down_pos:
+            dx = abs(event.x - self._mouse_down_pos[0])
+            dy = abs(event.y - self._mouse_down_pos[1])
+            if dx < self.LOCAL_DRAG_THRESHOLD and dy < self.LOCAL_DRAG_THRESHOLD:
+                return
         x, y = self._scale_coords(event.x, event.y)
         self._send_command({"action": "move", "x": x, "y": y})
 
     def _on_mouse_up(self, event, button):
+        self._mouse_down_pos = None
         x, y = self._scale_coords(event.x, event.y)
         self._send_command({"action": "mouse_up", "x": x, "y": y, "button": button})
 
