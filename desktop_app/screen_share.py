@@ -41,6 +41,7 @@ WM_QUIT = 0x0012
 LLKHF_INJECTED = 0x00000010
 LLMHF_INJECTED = 0x00000001
 
+WM_MOUSEMOVE = 0x0200
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
 WM_RBUTTONDOWN = 0x0204
@@ -85,8 +86,12 @@ def click_without_moving_cursor(x, y, button="left"):
     else:
         wm_down, wm_up, mk = WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON
 
+    # Pehle hover/move message bhejo - kuch buttons/controls sirf tab
+    # click register karte hain jab unhe pehle "mouse over" mila ho.
+    user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+    time.sleep(0.01)
     user32.PostMessageW(hwnd, wm_down, mk, lparam)
-    time.sleep(0.02)
+    time.sleep(0.03)
     user32.PostMessageW(hwnd, wm_up, 0, lparam)
 
 
@@ -168,9 +173,7 @@ class StopSharingButton:
             activeforeground="white", padx=14, pady=8
         ).pack()
         self.window.update_idletasks()
-        screen_w = self.window.winfo_screenwidth()
-        w = self.window.winfo_width()
-        self.window.geometry(f"+{screen_w - w - 20}+20")
+        self.window.geometry("+20+20")
 
     def get_rect(self):
         if not self.window:
@@ -360,6 +363,7 @@ class ScreenSharer:
 
         self.input_guard = None
         self.stop_button = None
+        self._pending_mouse_down = None
 
     def start(self):
         log(f"ScreenSharer.start() called for session={self.session_id} via relay {RELAY_WS_URL}")
@@ -576,6 +580,16 @@ class ScreenSharer:
                     self.overlay.set_text(badge_text)
 
             elif action == "move":
+                # Agar mouse_down "pending" hai (abhi tak decide nahi hua
+                # ke ye simple click hai ya real drag), aur ab movement aa
+                # gaya - to ye asal drag hai. Ab hi physical mouseDown
+                # karo (drag ke liye zaroori hai), warna simple click ke
+                # waqt cursor kabhi hilta hi nahi.
+                if self._pending_mouse_down and not self._dragging:
+                    pd = self._pending_mouse_down
+                    pyautogui.mouseDown(pd["x"], pd["y"], button=pd["button"])
+                    self._dragging = True
+
                 if self._dragging:
                     pyautogui.moveTo(cmd["x"], cmd["y"], duration=0)
                 if self.overlay:
@@ -585,13 +599,25 @@ class ScreenSharer:
                 click_without_moving_cursor(cmd["x"], cmd["y"], cmd.get("button", "left"))
 
             elif action == "mouse_down":
-                pyautogui.mouseDown(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
-                self._dragging = True
+                # Turant physical mouseDown mat karo - pehle wait karo
+                # dekhne ke liye ke ye simple click hai ya drag. Simple
+                # click ke liye asal cursor bilkul nahi hilna chahiye.
+                self._pending_mouse_down = {
+                    "x": cmd["x"], "y": cmd["y"], "button": cmd.get("button", "left")
+                }
 
             elif action == "mouse_up":
-                pyautogui.mouseUp(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
-                self._dragging = False
-                pyautogui.moveTo(cmd["x"], cmd["y"], duration=0)
+                if self._dragging:
+                    # Real drag ho chuka tha - normal tarah se release karo.
+                    pyautogui.mouseUp(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
+                    pyautogui.moveTo(cmd["x"], cmd["y"], duration=0)
+                    self._dragging = False
+                elif self._pending_mouse_down:
+                    # Beech mein koi move nahi aaya - ye simple click tha.
+                    # Message-based click karo, asal cursor bilkul nahi hilega.
+                    pd = self._pending_mouse_down
+                    click_without_moving_cursor(pd["x"], pd["y"], pd["button"])
+                self._pending_mouse_down = None
 
             elif action == "scroll":
                 x, y = cmd.get("x"), cmd.get("y")
