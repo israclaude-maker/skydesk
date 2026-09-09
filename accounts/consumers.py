@@ -6,7 +6,7 @@ from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.db.models import Q
-from .models import ConnectionLog
+from .models import ConnectionLog, FileTransferLog
 
 User = get_user_model()
 
@@ -66,6 +66,8 @@ class PresenceConsumer(AsyncWebsocketConsumer):
             await self.handle_check_online_status(data)
         elif message_type == "session_ended":
             await self.handle_session_ended(data)
+        elif message_type == "file_transfer_log":
+            await self.handle_file_transfer_log(data)
 
     # ---------- PIN set/change (apna khud ka PIN, apne liye) ----------
     async def handle_set_pin(self, data):
@@ -271,3 +273,20 @@ class PresenceConsumer(AsyncWebsocketConsumer):
             log.duration_seconds = int((log.ended_at - log.started_at).total_seconds())
             log.status = "ended"
             log.save()
+
+    # ---------- File transfer logging ----------
+    async def handle_file_transfer_log(self, data):
+        session_id = data.get("session_id")
+        filename = data.get("filename")
+        filesize = data.get("filesize", 0)
+        if session_id and filename:
+            await self.create_file_transfer_log(session_id, filename, filesize)
+
+    @database_sync_to_async
+    def create_file_transfer_log(self, session_id, filename, filesize):
+        FileTransferLog.objects.create(
+            session_id=session_id,
+            sender=self.user,
+            filename=filename,
+            filesize=filesize,
+        )

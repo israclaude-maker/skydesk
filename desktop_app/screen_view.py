@@ -1,5 +1,6 @@
 import os
 import threading
+import queue
 import time
 import json
 from io import BytesIO
@@ -41,6 +42,8 @@ class ScreenViewer:
         "end": "end",
     }
 
+    MODIFIER_KEYSYMS = {"control_l", "control_r", "alt_l", "alt_r", "shift_l", "shift_r"}
+
     CONNECT_RETRIES = 15
     CONNECT_RETRY_DELAY = 1
     FRAME_POLL_MS = 33  # ~30fps GUI refresh cap, independent of network arrival rate
@@ -75,6 +78,14 @@ class ScreenViewer:
 
         self.file_conn = None
         self._file_receiver = IncomingFileReceiver()
+
+        # Commands (mouse/keyboard) yahan queue hote hain, ek alag thread
+        # unhe bhejta hai - taake agar network atak jaye (jaise doosri
+        # taraf ka internet achanak chala jaye), to GUI thread kabhi
+        # block/"Not Responding" na ho.
+        self._cmd_send_queue = queue.Queue()
+        self._connection_lost_shown = False
+        self._modifiers_held = set()
     def start(self):
         log(f"ScreenViewer starting for session={self.session_id} via relay {RELAY_WS_URL}")
         self.window = tk.Toplevel()
@@ -103,6 +114,7 @@ class ScreenViewer:
         self.canvas.bind("<Button-3>", lambda e: self._on_click(e, "right"))
         self.canvas.bind("<MouseWheel>", self._on_scroll)
         self.window.bind("<Key>", self._on_key)
+        self.window.bind("<KeyRelease>", self._on_key_release)
         self.window.bind("<Configure>", self._on_resize)
         self.canvas.focus_set()
         self.window.protocol("WM_DELETE_WINDOW", self.stop)
@@ -142,7 +154,7 @@ class ScreenViewer:
                 return None
             try:
                 ws = websocket.create_connection(RELAY_WS_URL, timeout=10)
-                ws.settimeout(None)  # connect timeout only - don't timeout while waiting for a partner
+                ws.sock.settimeout(30)  # 30s ke andar kuch na aaye to socket dead maan lo
                 handshake = json.dumps({
                     "session_id": self.session_id,
                     "channel": channel,
@@ -223,6 +235,31 @@ class ScreenViewer:
             "- Your internet connection is working"
         )
 
+    def _show_connection_lost(self):
+        if self._connection_lost_shown or not self.running:
+            return
+        self._connection_lost_shown = True
+
+        if self.canvas and self.status_text_id:
+            self.canvas.itemconfig(
+                self.status_text_id,
+                text="Connection lost. The other computer may have disconnected."
+            )
+
+        retry = messagebox.askretrycancel(
+            "Connection Lost",
+            "Lost connection to the remote computer.\n"
+            "This can happen if their internet disconnected unexpectedly.\n\n"
+            "Try to reconnect?"
+        )
+        if not self.running:
+            return
+        if retry:
+            self._connection_lost_shown = False
+            threading.Thread(target=self._connect_control, daemon=True).start()
+        else:
+            self.stop()
+
     def _on_resize(self, event):
         if event.widget is self.window:
             self.win_width = event.width
@@ -230,11 +267,25 @@ class ScreenViewer:
 
     def _update_image(self, img):
         self.got_first_frame = True
-        w = max(self.win_width, 100)
-        h = max(self.win_height, 100)
-        if img.size != (w, h):
-            img = img.resize((w, h), Image.BILINEAR)
-        self._photo_ref = ImageTk.PhotoImage(img)
+        win_w = max(self.win_width, 100)
+        win_h = max(self.win_height, 100)
+        img_w, img_h = img.size
+
+        # Aspect ratio preserve karo - stretch/distort mat karo. Jo shape
+        # match nahi hoti, us hisse ko kaale background se bhar do
+        # (letterbox), jaisa video players karte hain.
+        scale = min(win_w / img_w, win_h / img_h)
+        new_w = max(1, int(img_w * scale))
+        new_h = max(1, int(img_h * scale))
+        if (new_w, new_h) != img.size:
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+
+        canvas_img = Image.new("RGB", (win_w, win_h), (34, 34, 34))
+        offset_x = (win_w - new_w) // 2
+        offset_y = (win_h - new_h) // 2
+        canvas_img.paste(img, (offset_x, offset_y))
+
+        self._photo_ref = ImageTk.PhotoImage(canvas_img)
         self.canvas.itemconfig(self.canvas_image_id, image=self._photo_ref)
         if self.status_text_id:
             self.canvas.itemconfig(self.status_text_id, text="")
@@ -249,8 +300,9 @@ class ScreenViewer:
         self.control_sock = sock
         log("Connected to sharer (control) via relay!")
 
-        self._send_command({"action": "identify", "name": self.my_username})
         threading.Thread(target=self._control_read_loop, daemon=True).start()
+        threading.Thread(target=self._command_send_loop, daemon=True).start()
+        self._send_command({"action": "identify", "name": self.my_username})
 
     def _control_read_loop(self):
         try:
@@ -265,6 +317,8 @@ class ScreenViewer:
                 self._handle_control_message(msg)
         except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError):
             log("Control channel closed")
+            if self.running and self.window:
+                self.window.after(0, self._show_connection_lost)
 
     def _handle_control_message(self, msg):
         action = msg.get("action")
@@ -348,11 +402,19 @@ class ScreenViewer:
             threading.Thread(
                 target=send_file_over_channel,
                 args=(self.file_conn, filepath, "upload_start", "upload_end"),
+                kwargs={"on_complete": self._log_file_sent},
                 daemon=True
             ).start()
             messagebox.showinfo("Sending", f"Sending '{os.path.basename(filepath)}' to the remote computer...")
         except Exception as e:
             messagebox.showerror("Send Failed", str(e))
+
+    def _log_file_sent(self, filename, filesize):
+        if self.ws_client:
+            try:
+                self.ws_client.send_file_transfer_log(self.session_id, filename, filesize)
+            except Exception as e:
+                log(f"Failed to log file transfer: {e}")
 
     def _request_file_dialog(self):
         if not self.file_conn:
@@ -391,11 +453,27 @@ class ScreenViewer:
         self.canvas.tag_raise(self.host_cursor_label_id)
 
     def _send_command(self, cmd):
-        if self.control_sock:
+        # GUI thread se seedha network pe kabhi mat likho - queue kar do,
+        # background thread hi asal socket.send() karega.
+        self._cmd_send_queue.put(cmd)
+
+    def _command_send_loop(self):
+        """Background thread jo queue se commands nikal kar bhejta hai.
+        Agar network atki hui ho (send() block ho jaye), sirf ye thread
+        rukta hai - GUI hamesha responsive rehti hai."""
+        while self.running:
             try:
-                self.control_sock.send(json.dumps(cmd))
-            except Exception as e:
-                log(f"Failed to send control command: {e}")
+                cmd = self._cmd_send_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if self.control_sock:
+                try:
+                    self.control_sock.send(json.dumps(cmd))
+                except Exception as e:
+                    log(f"Failed to send control command: {e}")
+                    # Connection mar chuki hai - is se aage bhejna
+                    # faltu hai, aur naye connect ka wait karna better hai.
+                    time.sleep(0.5)
 
     def _scale_coords(self, x, y):
         if not self.remote_width or not self.remote_height or not self.win_width or not self.win_height:
@@ -432,10 +510,36 @@ class ScreenViewer:
 
     def _on_key(self, event):
         keysym = event.keysym.lower()
+
+        if keysym in self.MODIFIER_KEYSYMS:
+            self._modifiers_held.add(keysym)
+            return  # sirf modifier dabane se kuch bhejna nahi
+
+        ctrl_held = "control_l" in self._modifiers_held or "control_r" in self._modifiers_held
+        alt_held = "alt_l" in self._modifiers_held or "alt_r" in self._modifiers_held
+        shift_held = "shift_l" in self._modifiers_held or "shift_r" in self._modifiers_held
+
+        if ctrl_held or alt_held:
+            # Ctrl/Alt ke sath koi bhi key = shortcut (Ctrl+C, Ctrl+V,
+            # Alt+Tab waghera) - poora combo ek "hotkey" command mein bhejo.
+            base_key = self.KEY_MAP.get(keysym, keysym)
+            modifiers = []
+            if ctrl_held:
+                modifiers.append("ctrl")
+            if alt_held:
+                modifiers.append("alt")
+            if shift_held:
+                modifiers.append("shift")
+            self._send_command({"action": "hotkey", "keys": modifiers + [base_key]})
+            return
+
         if keysym in self.KEY_MAP:
             self._send_command({"action": "key", "key": self.KEY_MAP[keysym]})
         elif len(event.char) == 1 and event.char.isprintable():
             self._send_command({"action": "type", "text": event.char})
+
+    def _on_key_release(self, event):
+        self._modifiers_held.discard(event.keysym.lower())
 
     def _prompt_unlock(self):
         dialog = tk.Toplevel(self.window)

@@ -4,6 +4,7 @@ import queue
 import time
 import json
 import ctypes
+import ctypes.wintypes as wintypes
 from io import BytesIO
 import mss
 from PIL import Image
@@ -20,16 +21,11 @@ pyautogui.PAUSE = 0
 pyautogui.MINIMUM_DURATION = 0
 pyautogui.MINIMUM_SLEEP = 0
 
-# Relay ab WebSocket (wss://) ke through, VPS ke already-open HTTPS (443)
-# port par - isliye har network isko pass hone deta hai, chahe wo sirf
-# real HTTPS traffic allow karta ho. Agar domain kabhi badle to sirf
-# yahan update karna hoga (ya isko config.py mein move kar lo).
 RELAY_WS_URL = "wss://skydesk.skyfinancia.com/relay/"
 
 CONNECT_RETRIES = 15
-CONNECT_RETRY_DELAY = 1  # seconds
+CONNECT_RETRY_DELAY = 1
 
-# ---------- Win32 constants for click-through, no-activate overlay ----------
 GWL_EXSTYLE = -20
 WS_EX_LAYERED = 0x00080000
 WS_EX_TRANSPARENT = 0x00000020
@@ -37,17 +33,163 @@ WS_EX_NOACTIVATE = 0x08000000
 WS_EX_TOOLWINDOW = 0x00000080
 
 user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
 
-# Module-level singleton: sirf EK badge/overlay window hamesha exist kare.
-# Agar purani session ka overlay properly band nahi hua tha (crash/abrupt
-# disconnect), naya ScreenSharer start hote hi ye purane ko destroy kar
-# dega - taake kabhi do overlays ek sath na dikhein.
+WH_KEYBOARD_LL = 13
+WH_MOUSE_LL = 14
+WM_QUIT = 0x0012
+LLKHF_INJECTED = 0x00000010
+LLMHF_INJECTED = 0x00000001
+
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
+WM_RBUTTONDOWN = 0x0204
+WM_RBUTTONUP = 0x0205
+MK_LBUTTON = 0x0001
+MK_RBUTTON = 0x0002
+
+HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", wintypes.DWORD), ("scanCode", wintypes.DWORD),
+        ("flags", wintypes.DWORD), ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+    ]
+
+
+class POINT(ctypes.Structure):
+    _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+
+class MSLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("pt", POINT), ("mouseData", wintypes.DWORD),
+        ("flags", wintypes.DWORD), ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+    ]
+
+
+def click_without_moving_cursor(x, y, button="left"):
+    pt = POINT(x, y)
+    hwnd = user32.WindowFromPoint(pt)
+    if not hwnd:
+        return
+    client_pt = POINT(x, y)
+    user32.ScreenToClient(hwnd, ctypes.byref(client_pt))
+    lparam = (client_pt.y << 16) | (client_pt.x & 0xFFFF)
+
+    if button == "right":
+        wm_down, wm_up, mk = WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON
+    else:
+        wm_down, wm_up, mk = WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON
+
+    user32.PostMessageW(hwnd, wm_down, mk, lparam)
+    time.sleep(0.02)
+    user32.PostMessageW(hwnd, wm_up, 0, lparam)
+
+
+class InputGuard:
+    def __init__(self):
+        self._thread = None
+        self._thread_id = None
+        self._kbd_hook = None
+        self._mouse_hook = None
+        self._allowed_rect = None
+        self._kbd_proc_ref = None
+        self._mouse_proc_ref = None
+        self._running = False
+
+    def set_allowed_rect(self, rect):
+        self._allowed_rect = rect
+
+    def start(self):
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        self._thread_id = kernel32.GetCurrentThreadId()
+        self._kbd_proc_ref = HOOKPROC(self._low_level_keyboard_proc)
+        self._mouse_proc_ref = HOOKPROC(self._low_level_mouse_proc)
+        hmod = kernel32.GetModuleHandleW(None)
+        self._kbd_hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self._kbd_proc_ref, hmod, 0)
+        self._mouse_hook = user32.SetWindowsHookExW(WH_MOUSE_LL, self._mouse_proc_ref, hmod, 0)
+        msg = wintypes.MSG()
+        while self._running:
+            ret = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+            if ret == 0 or ret == -1:
+                break
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+        if self._kbd_hook:
+            user32.UnhookWindowsHookEx(self._kbd_hook)
+        if self._mouse_hook:
+            user32.UnhookWindowsHookEx(self._mouse_hook)
+
+    def _low_level_keyboard_proc(self, nCode, wParam, lParam):
+        if nCode == 0:
+            info = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+            if not (info.flags & LLKHF_INJECTED):
+                return 1
+        return user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+    def _low_level_mouse_proc(self, nCode, wParam, lParam):
+        if nCode == 0:
+            info = ctypes.cast(lParam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
+            if not (info.flags & LLMHF_INJECTED):
+                rect = self._allowed_rect
+                x, y = info.pt.x, info.pt.y
+                inside = rect and rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3]
+                if not inside:
+                    return 1
+        return user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+    def stop(self):
+        self._running = False
+        if self._thread_id:
+            user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
+        if self._thread:
+            self._thread.join(timeout=2)
+
+
+class StopSharingButton:
+    def __init__(self, main_root, on_click):
+        self.main_root = main_root
+        self.window = tk.Toplevel(main_root)
+        self.window.overrideredirect(True)
+        self.window.attributes("-topmost", True)
+        self.window.configure(bg="#e11d48")
+        tk.Button(
+            self.window, text="\u274C Stop Sharing", command=on_click,
+            bg="#e11d48", fg="white", font=("Segoe UI", 10, "bold"),
+            relief="flat", bd=0, cursor="hand2", activebackground="#c11842",
+            activeforeground="white", padx=14, pady=8
+        ).pack()
+        self.window.update_idletasks()
+        screen_w = self.window.winfo_screenwidth()
+        w = self.window.winfo_width()
+        self.window.geometry(f"+{screen_w - w - 20}+20")
+
+    def get_rect(self):
+        if not self.window:
+            return None
+        self.window.update_idletasks()
+        x = self.window.winfo_rootx()
+        y = self.window.winfo_rooty()
+        return (x, y, x + self.window.winfo_width(), y + self.window.winfo_height())
+
+    def close(self):
+        if self.window:
+            self.window.destroy()
+            self.window = None
+
+
 _active_overlay = None
 
 
 def make_click_through(tk_window):
-    """Overlay ko OS level pe click-through + no-activate bana deta hai
-    taake yeh kabhi bhi mouse/keyboard focus na le."""
     hwnd = user32.GetParent(tk_window.winfo_id())
     if not hwnd:
         hwnd = tk_window.winfo_id()
@@ -57,13 +199,11 @@ def make_click_through(tk_window):
 
 
 def connect_to_relay(channel, session_id, role, retries=CONNECT_RETRIES):
-    """VPS relay (WebSocket) ko connect karta hai aur handshake bhejta
-    hai taake relay isko sahi partner ke sath pair kar sake."""
     last_error = None
     for attempt in range(retries):
         try:
             ws = websocket.create_connection(RELAY_WS_URL, timeout=10)
-            ws.settimeout(None)  # connect timeout only - don't timeout while waiting for a partner
+            ws.settimeout(None)
             handshake = json.dumps({
                 "session_id": session_id,
                 "channel": channel,
@@ -81,9 +221,6 @@ def connect_to_relay(channel, session_id, role, retries=CONNECT_RETRIES):
 
 
 def _show_file_notification(main_root, text):
-    """Sharer ki screen ke top-right corner mein ek chhota, click-through,
-    khud-band-hone-wala notification dikhata hai - sharer ko kuch click
-    nahi karna padta (input already blocked hai session ke dauran)."""
     main_root.after(0, lambda: _create_file_notification(main_root, text))
 
 
@@ -107,10 +244,6 @@ def _create_file_notification(main_root, text):
 
 
 class CursorOverlay:
-    """Sharer ki screen par controller ka naam dikhane wala chhota badge.
-    Click-through + no-activate hai, isliye kabhi bhi mouse/keyboard input
-    intercept nahi karega."""
-
     def __init__(self, main_root, label_text):
         self.main_root = main_root
         self.window = None
@@ -158,10 +291,6 @@ class CursorOverlay:
 
 
 class BorderOverlay:
-    """Sharer ki screen ke edges par blue border dikhata hai jab tak
-    sharing chal rahi hai (Zoom-style). Click-through hai, kabhi bhi
-    mouse/keyboard input intercept nahi karega."""
-
     def __init__(self, main_root):
         self.main_root = main_root
         self.window = None
@@ -224,41 +353,29 @@ class ScreenSharer:
         self.border_overlay = None
         self.cmd_queue = queue.Queue()
         self._control_conn_alive = False
-        self._input_blocked = False
         self._dragging = False
 
         self.file_conn = None
         self._file_receiver = IncomingFileReceiver()
 
-    def _set_input_blocked(self, blocked):
-        """Sharer ka apna physical mouse/keyboard block/unblock karta hai,
-        taake controller ke commands ke sath overlap na ho. Sirf hardware
-        input block hota hai - hamare apne pyautogui commands (isi process
-        se aa rahe) is process ke andar hi chalte rehte hain."""
-        if blocked == self._input_blocked:
-            return
-        try:
-            result = user32.BlockInput(blocked)
-            self._input_blocked = blocked
-            log(f"BlockInput({blocked}) -> {result}")
-        except Exception as e:
-            log(f"BlockInput({blocked}) failed: {e}")
+        self.input_guard = None
+        self.stop_button = None
 
     def start(self):
         log(f"ScreenSharer.start() called for session={self.session_id} via relay {RELAY_WS_URL}")
         self.running = True
-        # Sharer ka apna physical mouse/keyboard block kar do - taake sirf
-        # controller (viewer) ka mouse chale, dono ka mouse ek sath fight
-        # na kare. Windows khud Ctrl+Alt+Del pe hamesha input unblock kar
-        # deta hai (safety net), isliye sharer kabhi permanently lock nahi hoti.
-        self._set_input_blocked(True)
+
+        self.input_guard = InputGuard()
+        self.input_guard.start()
+        self.stop_button = StopSharingButton(self.main_root, self._on_stop_button_click)
+        self.input_guard.set_allowed_rect(self.stop_button.get_rect())
+
         self.border_overlay = BorderOverlay(self.main_root)
         threading.Thread(target=self._run_screen_channel, daemon=True).start()
         threading.Thread(target=self._run_control_channel, daemon=True).start()
         threading.Thread(target=self._command_worker, daemon=True).start()
         threading.Thread(target=self._run_file_channel, daemon=True).start()
 
-    # ---------- SCREEN STREAMING (via relay) ----------
     def _run_screen_channel(self):
         conn = connect_to_relay("screen", self.session_id, "sharer")
         if conn is None:
@@ -272,11 +389,9 @@ class ScreenSharer:
                     img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
 
                     buffer = BytesIO()
-                    img.save(buffer, format="JPEG", quality=50)
+                    img.save(buffer, format="JPEG", quality=75)
                     data = buffer.getvalue()
 
-                    # WebSocket messages already have their own boundaries -
-                    # no need to manually prefix with a length like raw TCP did.
                     conn.send(data, opcode=websocket.ABNF.OPCODE_BINARY)
 
                     time.sleep(1 / 15)
@@ -290,14 +405,11 @@ class ScreenSharer:
             except Exception:
                 pass
 
-    # ---------- CONTROL (via relay) ----------
     def _run_control_channel(self):
         conn = connect_to_relay("control", self.session_id, "sharer")
         if conn is None:
             return
 
-        # Real screen resolution ek dafa bhej do - viewer isse coordinate
-        # scaling sahi karega.
         try:
             with mss.mss() as sct:
                 mon = sct.monitors[1]
@@ -327,7 +439,6 @@ class ScreenSharer:
         finally:
             global _active_overlay
             self._control_conn_alive = False
-            self._set_input_blocked(False)
             if self.overlay:
                 self.overlay.close()
                 if _active_overlay is self.overlay:
@@ -341,8 +452,6 @@ class ScreenSharer:
                 pass
 
     def _host_cursor_send_thread(self, conn):
-        """Sharer ki apni real mouse position har ~50ms mein viewer ko
-        wapas bhejta hai (naam ke sath), taake viewer usko bhi dikha sake."""
         self._control_conn_alive = True
 
         def _worker():
@@ -369,10 +478,9 @@ class ScreenSharer:
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    # ---------- FILE TRANSFER (via relay, separate channel) ----------
-    # Poora automatic hai - sharer ko kuch click nahi karna, kyunke sharing
-    # ke dauran unka physical input already blocked hota hai. Viewer hi
-    # upload push kar sakta hai ya download request bhej sakta hai.
+    def _on_stop_button_click(self):
+        self.stop()
+
     def _run_file_channel(self):
         conn = connect_file_channel(self.session_id, "sharer")
         if conn is None:
@@ -404,7 +512,10 @@ class ScreenSharer:
             remote_path = msg.get("filename", "")
             if remote_path and os.path.isfile(remote_path):
                 try:
-                    send_file_over_channel(conn, remote_path, "download_data_start", "download_data_end")
+                    send_file_over_channel(
+                        conn, remote_path, "download_data_start", "download_data_end",
+                        on_complete=self._log_file_sent
+                    )
                     _show_file_notification(self.main_root, f"\U0001F4E4 File sent: {os.path.basename(remote_path)}")
                 except Exception as e:
                     log(f"Failed to send requested file: {e}")
@@ -415,7 +526,13 @@ class ScreenSharer:
                     "message": f"File not found: {remote_path}"
                 }))
 
-    # ---------- COMMAND EXECUTION (separate worker thread) ----------
+    def _log_file_sent(self, filename, filesize):
+        if self.ws_client:
+            try:
+                self.ws_client.send_file_transfer_log(self.session_id, filename, filesize)
+            except Exception as e:
+                log(f"Failed to log file transfer: {e}")
+
     def _command_worker(self):
         while True:
             try:
@@ -449,9 +566,6 @@ class ScreenSharer:
             if action == "identify":
                 name = cmd.get("name", "?")
                 badge_text = name[0].upper()
-                # Pehle purani (kisi bhi wajah se reh gayi) overlay window
-                # hamesha destroy kar do - taake kabhi 2 badges ek sath na
-                # dikhein, sirf ek hi (current session ka) rahe.
                 if _active_overlay is not None and _active_overlay is not self.overlay:
                     _active_overlay.close()
                     _active_overlay = None
@@ -460,35 +574,15 @@ class ScreenSharer:
                     _active_overlay = self.overlay
                 else:
                     self.overlay.set_text(badge_text)
-                # Controller connect ho gaya - ab sharer ka apna mouse/keyboard
-                # block kar do taake dono ka input ek dusre se na takraye.
-                self._set_input_blocked(True)
 
             elif action == "move":
-                # Sirf hover/move par asal Windows cursor mat hilao - warna
-                # sharer ka cursor hamesha controller ke pichhe "khichta"
-                # dikhta hai, jab controller sirf point kar raha ho, click
-                # na kare. Sirf badge move karo taake sharer ko controller
-                # ki position ka visual andaza ho, bina unka asal cursor
-                # disturb kiye. Asal cursor sirf click/scroll/drag ke waqt
-                # hilega.
                 if self._dragging:
                     pyautogui.moveTo(cmd["x"], cmd["y"], duration=0)
                 if self.overlay:
                     self.overlay.move_to(cmd["x"], cmd["y"])
 
             elif action == "click":
-                # Click se pehle sharer ka asal cursor kahan tha, yaad rakho -
-                # click ke turant baad wahin wapas bhej denge, taake sharer
-                # ka cursor hamesha wahin dikhe jahan usne last chhoda tha,
-                # chahe controller kitni bhi clicks kar le.
-                try:
-                    home = pyautogui.position()
-                except Exception:
-                    home = None
-                pyautogui.click(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
-                if home is not None:
-                    pyautogui.moveTo(home.x, home.y, duration=0)
+                click_without_moving_cursor(cmd["x"], cmd["y"], cmd.get("button", "left"))
 
             elif action == "mouse_down":
                 pyautogui.mouseDown(cmd["x"], cmd["y"], button=cmd.get("button", "left"))
@@ -514,6 +608,11 @@ class ScreenSharer:
             elif action == "key":
                 pyautogui.press(cmd["key"])
 
+            elif action == "hotkey":
+                keys = cmd.get("keys", [])
+                if keys:
+                    pyautogui.hotkey(*keys)
+
             elif action == "type":
                 pyautogui.write(cmd["text"], interval=0)
 
@@ -532,7 +631,12 @@ class ScreenSharer:
             except Exception:
                 pass
         self._control_conn_alive = False
-        self._set_input_blocked(False)
+        if self.input_guard:
+            self.input_guard.stop()
+            self.input_guard = None
+        if self.stop_button:
+            self.stop_button.close()
+            self.stop_button = None
         if self.overlay:
             self.overlay.close()
             if _active_overlay is self.overlay:
@@ -545,10 +649,3 @@ class ScreenSharer:
                 self.file_conn.close()
             except Exception:
                 pass
-        if self.file_conn:
-            try:
-                self.file_conn.close()
-            except Exception:
-                pass
-
-

@@ -73,3 +73,17 @@ class ConnectionLog(models.Model):
 
     def __str__(self):
         return f"{self.requester} -> {self.target} ({self.status})"
+
+
+class FileTransferLog(models.Model):
+    session_id = models.CharField(max_length=20)
+    sender = models.ForeignKey(
+        CustomUser, related_name="sent_files",
+        on_delete=models.SET_NULL, null=True
+    )
+    filename = models.CharField(max_length=255)
+    filesize = models.PositiveBigIntegerField()
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.sender} sent {self.filename}"

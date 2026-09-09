@@ -99,6 +99,26 @@ class WSClient:
         if self.ws:
             self.ws.send(json.dumps(message))
 
+    def send_file_transfer_log(self, session_id, filename, filesize):
+        message = {
+            "type": "file_transfer_log",
+            "session_id": session_id,
+            "filename": filename,
+            "filesize": filesize,
+        }
+        if self.ws:
+            self.ws.send(json.dumps(message))
+
+    def send_file_transfer_log(self, session_id, filename, filesize):
+        message = {
+            "type": "file_transfer_log",
+            "session_id": session_id,
+            "filename": filename,
+            "filesize": filesize,
+        }
+        if self.ws:
+            self.ws.send(json.dumps(message))
+
     def close(self):
         if self.ws:
             self.ws.close()

@@ -15,7 +15,7 @@ admin.site.register(CustomUser, CustomUserAdmin)
 
 
 from django.contrib import admin
-from .models import ConnectionLog
+from .models import ConnectionLog, FileTransferLog
 
 
 @admin.register(ConnectionLog)
@@ -26,3 +26,10 @@ class ConnectionLogAdmin(admin.ModelAdmin):
     search_fields = ("session_id", "requester__username", "target__username",
                       "requester__remote_id", "target__remote_id")
     ordering = ("-started_at",)
+
+
+@admin.register(FileTransferLog)
+class FileTransferLogAdmin(admin.ModelAdmin):
+    list_display = ("session_id", "sender", "filename", "filesize", "sent_at")
+    search_fields = ("session_id", "sender__username", "filename")
+    ordering = ("-sent_at",)

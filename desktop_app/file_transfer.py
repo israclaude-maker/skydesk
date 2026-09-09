@@ -41,9 +41,10 @@ def connect_file_channel(session_id, role):
     return None
 
 
-def send_file_over_channel(conn, filepath, start_type, end_type):
+def send_file_over_channel(conn, filepath, start_type, end_type, on_complete=None):
     """Ek file ko chunks mein bhejta hai: pehle JSON header (start_type),
-    phir binary chunks, phir JSON footer (end_type)."""
+    phir binary chunks, phir JSON footer (end_type). Successfully bhejne
+    ke baad on_complete(filename, filesize) call hota hai, agar diya gaya ho."""
     filename = os.path.basename(filepath)
     filesize = os.path.getsize(filepath)
 
@@ -62,6 +63,12 @@ def send_file_over_channel(conn, filepath, start_type, end_type):
 
     conn.send(json.dumps({"type": end_type}))
     log(f"Sent file '{filename}' ({filesize} bytes) as {start_type}")
+
+    if on_complete:
+        try:
+            on_complete(filename, filesize)
+        except Exception as e:
+            log(f"on_complete callback error: {e}")
 
 
 class IncomingFileReceiver:
