@@ -490,8 +490,25 @@ class ScreenViewer:
     def _scale_coords(self, x, y):
         if not self.remote_width or not self.remote_height or not self.win_width or not self.win_height:
             return x, y
-        real_x = int(x * (self.remote_width / self.win_width))
-        real_y = int(y * (self.remote_height / self.win_height))
+
+        # _update_image jaisa hi letterbox calculation - taake click
+        # exactly wahin jaye jahan image dikh rahi hai, kaali patti
+        # (letterbox) ke offset ko dhyan mein rakhte hue.
+        win_w = max(self.win_width, 100)
+        win_h = max(self.win_height, 100)
+        scale = min(win_w / self.remote_width, win_h / self.remote_height)
+        drawn_w = self.remote_width * scale
+        drawn_h = self.remote_height * scale
+        offset_x = (win_w - drawn_w) / 2
+        offset_y = (win_h - drawn_h) / 2
+
+        # Click position ko image area ke andar clamp karo (kaali patti
+        # pe click ho to nearest edge maan lo).
+        rel_x = min(max(x - offset_x, 0), drawn_w)
+        rel_y = min(max(y - offset_y, 0), drawn_h)
+
+        real_x = int(rel_x / scale)
+        real_y = int(rel_y / scale)
         real_x = max(0, min(real_x, self.remote_width - 1))
         real_y = max(0, min(real_y, self.remote_height - 1))
         return real_x, real_y
