@@ -387,7 +387,7 @@ class ScreenSharer:
                     img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
 
                     buffer = BytesIO()
-                    img.save(buffer, format="JPEG", quality=75)
+                    img.save(buffer, format="JPEG", quality=85)
                     data = buffer.getvalue()
 
                     conn.send(data, opcode=websocket.ABNF.OPCODE_BINARY)

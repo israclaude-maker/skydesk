@@ -40,9 +40,23 @@ class ScreenViewer:
         "delete": "delete",
         "home": "home",
         "end": "end",
+        "prior": "pageup",
+        "next": "pagedown",
+        "f1": "f1",
+        "f2": "f2",
+        "f3": "f3",
+        "f4": "f4",
+        "f5": "f5",
+        "f6": "f6",
+        "f7": "f7",
+        "f8": "f8",
+        "f9": "f9",
+        "f10": "f10",
+        "f11": "f11",
+        "f12": "f12",
     }
 
-    MODIFIER_KEYSYMS = {"control_l", "control_r", "alt_l", "alt_r", "shift_l", "shift_r"}
+    MODIFIER_KEYSYMS = {"control_l", "control_r", "alt_l", "alt_r", "shift_l", "shift_r", "super_l", "super_r"}
 
     CONNECT_RETRIES = 15
     CONNECT_RETRY_DELAY = 1
@@ -557,10 +571,17 @@ class ScreenViewer:
         ctrl_held = "control_l" in self._modifiers_held or "control_r" in self._modifiers_held
         alt_held = "alt_l" in self._modifiers_held or "alt_r" in self._modifiers_held
         shift_held = "shift_l" in self._modifiers_held or "shift_r" in self._modifiers_held
+        win_held = "super_l" in self._modifiers_held or "super_r" in self._modifiers_held
 
-        if ctrl_held or alt_held:
-            # Ctrl/Alt ke sath koi bhi key = shortcut (Ctrl+C, Ctrl+V,
-            # Alt+Tab waghera) - poora combo ek "hotkey" command mein bhejo.
+        # Ctrl/Alt ke sath koi bhi key = shortcut (Ctrl+C, Alt+Tab).
+        # Sirf Shift ke sath bhi tab hotkey banao jab key ek "named" key
+        # ho (arrow, Home, End, Delete, Tab, F2 waghera) - Shift+Arrow
+        # text selection extend karta hai, jo sirf plain "left"/"right"
+        # bhejne se nahi hota. Shift+letter (jaise 'A') already event.char
+        # se sahi (capital) mil jata hai, usay yahan chhedne ki zaroorat nahi.
+        needs_shift_combo = shift_held and keysym in self.KEY_MAP
+
+        if ctrl_held or alt_held or win_held or needs_shift_combo:
             base_key = self.KEY_MAP.get(keysym, keysym)
             modifiers = []
             if ctrl_held:
@@ -569,6 +590,8 @@ class ScreenViewer:
                 modifiers.append("alt")
             if shift_held:
                 modifiers.append("shift")
+            if win_held:
+                modifiers.append("win")
             self._send_command({"action": "hotkey", "keys": modifiers + [base_key]})
             return
 
