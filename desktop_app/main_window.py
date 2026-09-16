@@ -183,8 +183,29 @@ class MainWindow:
         container = tk.Frame(self.root, bg=Theme.BG)
         container.pack(expand=True, fill="both")
 
-        content = tk.Frame(container, bg=Theme.BG)
-        content.place(relx=0.5, rely=0.5, anchor="center", width=540)
+        self.outer_canvas = tk.Canvas(container, bg=Theme.BG, highlightthickness=0)
+        self.outer_canvas.pack(side="left", fill="both", expand=True)
+
+        scrollbar = tk.Scrollbar(container, orient="vertical", command=self.outer_canvas.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.outer_canvas.configure(yscrollcommand=scrollbar.set)
+
+        content = tk.Frame(self.outer_canvas, bg=Theme.BG)
+        content_window = self.outer_canvas.create_window((0, 0), window=content, anchor="n")
+
+        def _on_content_configure(event):
+            self.outer_canvas.configure(scrollregion=self.outer_canvas.bbox("all"))
+
+        def _center_content(event):
+            x = max((event.width - 540) // 2, 0)
+            self.outer_canvas.coords(content_window, x, 0)
+
+        content.bind("<Configure>", _on_content_configure)
+        self.outer_canvas.bind("<Configure>", _center_content)
+
+        def _on_mousewheel(event):
+            self.outer_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.outer_canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
         # ---- Big greeting header (centered) ----
         header = tk.Frame(content, bg=Theme.BG)
