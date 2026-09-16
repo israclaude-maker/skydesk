@@ -3,6 +3,8 @@ import threading
 import queue
 import time
 import json
+import ctypes
+import ctypes.wintypes as wintypes
 from io import BytesIO
 from PIL import Image, ImageTk
 import tkinter as tk
@@ -18,6 +20,100 @@ from file_transfer import (
 # port par - isliye har network isko pass hone deta hai, chahe wo sirf
 # real HTTPS traffic allow karta ho.
 RELAY_WS_URL = "wss://skydesk.skyfinancia.com/relay/"
+
+
+user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
+
+WH_KEYBOARD_LL = 13
+WM_QUIT = 0x0012
+LLKHF_INJECTED = 0x00000010
+VK_LWIN = 0x5B
+VK_RWIN = 0x5C
+VK_LEFT = 0x25
+VK_UP = 0x26
+VK_RIGHT = 0x27
+VK_DOWN = 0x28
+VK_D = 0x44
+
+HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", wintypes.DWORD), ("scanCode", wintypes.DWORD),
+        ("flags", wintypes.DWORD), ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+    ]
+
+
+class WinSnapGuard:
+    """Jab viewer window focused ho, Win+Arrow/Win+D ko Windows OS ke
+    khud snap/minimize karne se PEHLE hi 'chura' leta hai (suppress kar
+    deta hai) - taake ye sirf remote ko forward ho, aur controller ki
+    apni window kabhi snap na ho."""
+
+    ARROW_KEYS = {VK_LEFT: "left", VK_UP: "up", VK_RIGHT: "right", VK_DOWN: "down"}
+
+    def __init__(self, get_hwnd, on_win_combo):
+        self._get_hwnd = get_hwnd
+        self._on_win_combo = on_win_combo
+        self._win_down = False
+        self._thread = None
+        self._thread_id = None
+        self._hook = None
+        self._proc_ref = None
+        self._running = False
+
+    def start(self):
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        self._thread_id = kernel32.GetCurrentThreadId()
+        self._proc_ref = HOOKPROC(self._proc)
+        hmod = kernel32.GetModuleHandleW(None)
+        self._hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self._proc_ref, hmod, 0)
+        msg = wintypes.MSG()
+        while self._running:
+            ret = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+            if ret == 0 or ret == -1:
+                break
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+        if self._hook:
+            user32.UnhookWindowsHookEx(self._hook)
+
+    def _proc(self, nCode, wParam, lParam):
+        WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP = 0x0100, 0x0101, 0x0104, 0x0105
+        if nCode == 0:
+            info = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+            if not (info.flags & LLKHF_INJECTED):
+                our_hwnd = self._get_hwnd()
+                is_our_window = our_hwnd and user32.GetForegroundWindow() == our_hwnd
+
+                if info.vkCode in (VK_LWIN, VK_RWIN):
+                    if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                        self._win_down = True
+                    elif wParam in (WM_KEYUP, WM_SYSKEYUP):
+                        self._win_down = False
+
+                elif self._win_down and is_our_window and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                    if info.vkCode in self.ARROW_KEYS:
+                        self._on_win_combo(self.ARROW_KEYS[info.vkCode])
+                        return 1  # suppress - controller ki apni window snap nahi hogi
+                    elif info.vkCode == VK_D:
+                        self._on_win_combo("d")
+                        return 1
+        return user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+    def stop(self):
+        self._running = False
+        if self._thread_id:
+            user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
+        if self._thread:
+            self._thread.join(timeout=2)
 
 
 class ScreenViewer:
@@ -107,6 +203,10 @@ class ScreenViewer:
         # false drag na trigger kare.
         self._mouse_down_pos = None
         self.LOCAL_DRAG_THRESHOLD = 4
+
+        self._win_snap_guard = None
+        self._last_frame_time = None
+        self.FRAME_TIMEOUT_SECONDS = 8
     def start(self):
         log(f"ScreenViewer starting for session={self.session_id} via relay {RELAY_WS_URL}")
         self.window = tk.Toplevel()
@@ -137,6 +237,11 @@ class ScreenViewer:
         self.window.bind("<Key>", self._on_key)
         self.window.bind("<KeyRelease>", self._on_key_release)
         self.window.bind("<Configure>", self._on_resize)
+        # Safety net: agar Windows shortcut steal kar le (jaise Win+Left)
+        # aur KeyRelease kabhi na aaye, to modifiers "stuck" reh jate hain -
+        # focus change hote hi sab clear kar do.
+        self.window.bind("<FocusIn>", lambda e: self._modifiers_held.clear())
+        self.window.bind("<FocusOut>", lambda e: self._modifiers_held.clear())
         self.canvas.focus_set()
         self.window.protocol("WM_DELETE_WINDOW", self.stop)
 
@@ -165,8 +270,41 @@ class ScreenViewer:
         threading.Thread(target=self._connect_control, daemon=True).start()
         threading.Thread(target=self._connect_file_channel, daemon=True).start()
 
+        self._win_snap_guard = WinSnapGuard(self._get_window_hwnd, self._on_win_combo)
+        self._win_snap_guard.start()
+
+        threading.Thread(target=self._frame_watchdog, daemon=True).start()
+
         # Start the fixed-rate GUI poll loop (main thread only).
         self.window.after(self.FRAME_POLL_MS, self._poll_frame)
+
+    def _get_window_hwnd(self):
+        if not self.window:
+            return None
+        try:
+            hwnd = user32.GetParent(self.window.winfo_id())
+            return hwnd if hwnd else self.window.winfo_id()
+        except Exception:
+            return None
+
+    def _on_win_combo(self, key):
+        # WinSnapGuard ki apni background thread se call hota hai -
+        # seedha _send_command call karna safe hai (wahi Queue.put karta
+        # hai, koi Tk call nahi).
+        self._send_command({"action": "hotkey", "keys": ["win", key]})
+
+    def _frame_watchdog(self):
+        """Agar screen channel se koi naya frame na aaye (jaise doosri
+        taraf ka internet achanak chala jaye), screen "frozen" reh jati
+        thi bina kisi warning ke. Ye thread check karta rehta hai."""
+        while self.running:
+            time.sleep(2)
+            with self._frame_lock:
+                last = self._last_frame_time
+            if last and self.got_first_frame and (time.time() - last) > self.FRAME_TIMEOUT_SECONDS:
+                if self.window:
+                    self.window.after(0, self._show_connection_lost)
+                break
 
     def _connect_relay(self, channel):
         last_error = None
@@ -218,6 +356,7 @@ class ScreenViewer:
                 # piling up.
                 with self._frame_lock:
                     self._pending_frame = img
+                    self._last_frame_time = time.time()
         except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError):
             log("Sharer disconnected")
         finally:
@@ -644,6 +783,9 @@ class ScreenViewer:
 
     def stop(self):
         self.running = False
+        if self._win_snap_guard:
+            self._win_snap_guard.stop()
+            self._win_snap_guard = None
         if self.ws_client:
             try:
                 self.ws_client.send_session_ended(self.session_id)
