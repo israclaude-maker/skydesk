@@ -1,4 +1,5 @@
 import os
+import socket
 import threading
 import queue
 import time
@@ -16,9 +17,7 @@ from file_transfer import (
     connect_file_channel, send_file_over_channel, IncomingFileReceiver, get_received_folder
 )
 
-# Relay ab WebSocket (wss://) ke through, VPS ke already-open HTTPS (443)
-# port par - isliye har network isko pass hone deta hai, chahe wo sirf
-# real HTTPS traffic allow karta ho.
+# Relay WebSocket (wss://) ke through, VPS ke already-open HTTPS (443) port par.
 RELAY_WS_URL = "wss://skydesk.skyfinancia.com/relay/"
 
 
@@ -156,7 +155,9 @@ class ScreenViewer:
 
     CONNECT_RETRIES = 15
     CONNECT_RETRY_DELAY = 1
-    FRAME_POLL_MS = 33  # ~30fps GUI refresh cap, independent of network arrival rate
+    FRAME_POLL_MS = 16            # ~60Hz GUI poll (sirf tab draw hota hai jab naya frame ho)
+    SOCKET_TIMEOUT = 30
+    MOVE_SEND_INTERVAL = 0.012    # max ~80 mouse-move/sec
 
     def __init__(self, session_id, my_username="User", ws_client=None):
         self.session_id = session_id
@@ -173,40 +174,42 @@ class ScreenViewer:
         self.got_first_frame = False
         self.win_width = 1000
         self.win_height = 650
+        # remote_width/height SIRF screen_info se aate hain (sharer ki asal
+        # screen size) - frame size se nahi, kyunke sharer frame downscale
+        # karta hai. Clicks asal size ke hisab se map hote hain.
         self.remote_width = None
         self.remote_height = None
         self._photo_ref = None
 
-        # Latest-frame-only buffer: the network thread overwrites this as
-        # fast as frames arrive; the GUI polls it at a fixed rate. This
-        # prevents thousands of stale after() callbacks from piling up if
-        # the window is minimized/backgrounded for a while (e.g. the user
-        # steps away for a few minutes) - old frames are simply dropped
-        # instead of queued, so there's no backlog to "catch up" on.
+        # Pipeline: recv thread (raw bytes) -> decode thread -> GUI thread.
+        # Har stage sirf LATEST item rakhta hai, purane drop ho jate hain.
         self._frame_lock = threading.Lock()
+        self._raw_frame = None
+        self._last_raw = None
+        self._frame_event = threading.Event()
         self._pending_frame = None
+        self._last_frame_time = None
 
         self.file_conn = None
         self._file_receiver = IncomingFileReceiver()
 
-        # Commands (mouse/keyboard) yahan queue hote hain, ek alag thread
-        # unhe bhejta hai - taake agar network atak jaye (jaise doosri
-        # taraf ka internet achanak chala jaye), to GUI thread kabhi
-        # block/"Not Responding" na ho.
+        # Commands queue hote hain, alag thread bhejta hai - GUI kabhi block nahi hota.
+        # Mouse "move" coalesce hota hai (sirf latest move bhejo).
         self._cmd_send_queue = queue.Queue()
+        self._cmd_lock = threading.Lock()
+        self._cmd_event = threading.Event()
+        self._pending_move = None
+
         self._connection_lost_shown = False
         self._modifiers_held = set()
+        self._gen = 0   # reconnect ke waqt purane threads ko band karne ke liye
 
-        # Drag detection ab viewer window ke apne (unscaled) pixels mein
-        # hoti hai, scaling se pehle - taake chhoti window se bari remote
-        # screen tak scale hone par hath ki halki jitter amplify ho kar
-        # false drag na trigger kare.
         self._mouse_down_pos = None
         self.LOCAL_DRAG_THRESHOLD = 4
 
         self._win_snap_guard = None
-        self._last_frame_time = None
-        self.FRAME_TIMEOUT_SECONDS = 8
+        self.FRAME_TIMEOUT_SECONDS = 15   # sharer har 2s mein keepalive frame bhejta hai
+
     def start(self):
         log(f"ScreenViewer starting for session={self.session_id} via relay {RELAY_WS_URL}")
         self.window = tk.Toplevel()
@@ -222,8 +225,7 @@ class ScreenViewer:
             fill="white", font=("Segoe UI", 12)
         )
 
-        # Drag & drop: OS file explorer se koi bhi file seedha is window
-        # pe drop karke bhej sakte hain, jaisa AnyDesk mein hota hai.
+        # Drag & drop: file seedha window pe drop karke bhej sakte hain.
         self.window.drop_target_register(DND_FILES)
         self.window.dnd_bind("<<Drop>>", self._on_file_drop)
 
@@ -237,9 +239,7 @@ class ScreenViewer:
         self.window.bind("<Key>", self._on_key)
         self.window.bind("<KeyRelease>", self._on_key_release)
         self.window.bind("<Configure>", self._on_resize)
-        # Safety net: agar Windows shortcut steal kar le (jaise Win+Left)
-        # aur KeyRelease kabhi na aaye, to modifiers "stuck" reh jate hain -
-        # focus change hote hi sab clear kar do.
+        # Safety net: focus change par modifiers clear.
         self.window.bind("<FocusIn>", lambda e: self._modifiers_held.clear())
         self.window.bind("<FocusOut>", lambda e: self._modifiers_held.clear())
         self.canvas.focus_set()
@@ -266,17 +266,27 @@ class ScreenViewer:
         self.win_height = self.window.winfo_height()
 
         self.running = True
-        threading.Thread(target=self._connect_screen_stream, daemon=True).start()
-        threading.Thread(target=self._connect_control, daemon=True).start()
+
+        # Ek hi command-send thread poori session ke liye (reconnect par dobara nahi banta).
+        threading.Thread(target=self._command_send_loop, daemon=True).start()
+        threading.Thread(target=self._decode_loop, daemon=True).start()
         threading.Thread(target=self._connect_file_channel, daemon=True).start()
+        self._start_stream_threads()
 
         self._win_snap_guard = WinSnapGuard(self._get_window_hwnd, self._on_win_combo)
         self._win_snap_guard.start()
 
-        threading.Thread(target=self._frame_watchdog, daemon=True).start()
-
-        # Start the fixed-rate GUI poll loop (main thread only).
         self.window.after(self.FRAME_POLL_MS, self._poll_frame)
+
+    def _start_stream_threads(self):
+        """Screen + control + watchdog threads (reconnect par bhi yahi chalta hai)."""
+        self._gen += 1
+        gen = self._gen
+        with self._frame_lock:
+            self._last_frame_time = None
+        threading.Thread(target=self._connect_screen_stream, args=(gen,), daemon=True).start()
+        threading.Thread(target=self._connect_control, args=(gen,), daemon=True).start()
+        threading.Thread(target=self._frame_watchdog, args=(gen,), daemon=True).start()
 
     def _get_window_hwnd(self):
         if not self.window:
@@ -288,32 +298,32 @@ class ScreenViewer:
             return None
 
     def _on_win_combo(self, key):
-        # WinSnapGuard ki apni background thread se call hota hai -
-        # seedha _send_command call karna safe hai (wahi Queue.put karta
-        # hai, koi Tk call nahi).
+        # WinSnapGuard ki background thread se call hota hai - sirf queue.put, koi Tk call nahi.
         self._send_command({"action": "hotkey", "keys": ["win", key]})
 
-    def _frame_watchdog(self):
-        """Agar screen channel se koi naya frame na aaye (jaise doosri
-        taraf ka internet achanak chala jaye), screen "frozen" reh jati
-        thi bina kisi warning ke. Ye thread check karta rehta hai."""
-        while self.running:
+    def _frame_watchdog(self, gen):
+        """Agar screen channel se bohot der koi frame na aaye to user ko batao."""
+        while self.running and gen == self._gen:
             time.sleep(2)
             with self._frame_lock:
                 last = self._last_frame_time
-            if last and self.got_first_frame and (time.time() - last) > self.FRAME_TIMEOUT_SECONDS:
-                if self.window:
+            if last and (time.time() - last) > self.FRAME_TIMEOUT_SECONDS:
+                if self.window and gen == self._gen:
                     self.window.after(0, self._show_connection_lost)
                 break
 
-    def _connect_relay(self, channel):
+    def _connect_relay(self, channel, gen=None):
         last_error = None
         for attempt in range(self.CONNECT_RETRIES):
-            if not self.running and attempt > 0:
+            if not self.running or (gen is not None and gen != self._gen):
                 return None
             try:
-                ws = websocket.create_connection(RELAY_WS_URL, timeout=10)
-                ws.sock.settimeout(30)  # 30s ke andar kuch na aaye to socket dead maan lo
+                ws = websocket.create_connection(
+                    RELAY_WS_URL, timeout=10,
+                    sockopt=((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),
+                             (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1))
+                )
+                ws.settimeout(self.SOCKET_TIMEOUT)
                 handshake = json.dumps({
                     "session_id": self.session_id,
                     "channel": channel,
@@ -329,57 +339,97 @@ class ScreenViewer:
         log(f"Giving up connecting to relay for channel={channel}. Last error: {last_error}")
         return None
 
-    def _connect_screen_stream(self):
-        sock = self._connect_relay("screen")
+    # ------------------------------------------------------------------
+    # SCREEN: recv thread (raw bytes only) -> decode thread -> GUI
+    # ------------------------------------------------------------------
+    def _connect_screen_stream(self, gen):
+        sock = self._connect_relay("screen", gen)
         if sock is None:
-            self.window.after(0, self._connection_failed)
+            if self.window and self.running and gen == self._gen:
+                self.window.after(0, self._connection_failed)
             return
 
         log("Connected to sharer (screen) via relay!")
 
         try:
-            while self.running:
-                frame_data = sock.recv()
-                if not frame_data or isinstance(frame_data, str):
+            while self.running and gen == self._gen:
+                try:
+                    data = sock.recv()
+                except websocket.WebSocketTimeoutException:
+                    continue   # screen static thi, frame nahi aaya - normal
+                if not data or isinstance(data, str):
                     continue
-
-                img = Image.open(BytesIO(frame_data))
-                img.load()  # decode now, off the GUI thread
-
-                if self.remote_width is None:
-                    self.remote_width, self.remote_height = img.size
-                    log(f"Remote resolution detected from frame: {self.remote_width}x{self.remote_height}")
-
-                # Just overwrite the pending frame - never queue. If the GUI
-                # thread hasn't had a chance to render the previous one yet
-                # (e.g. window was backgrounded), it gets dropped instead of
-                # piling up.
+                # Sirf raw bytes rakho - purana undecoded frame drop ho jata hai.
                 with self._frame_lock:
-                    self._pending_frame = img
+                    self._raw_frame = data
                     self._last_frame_time = time.time()
-        except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError):
-            log("Sharer disconnected")
+                self._frame_event.set()
+        except Exception as e:
+            log(f"Screen stream ended: {e}")
+            if self.running and gen == self._gen and self.window:
+                self.window.after(0, self._show_connection_lost)
         finally:
             try:
                 sock.close()
             except Exception:
                 pass
 
+    def _decode_loop(self):
+        while self.running:
+            if not self._frame_event.wait(0.5):
+                continue
+            self._frame_event.clear()
+            with self._frame_lock:
+                raw, self._raw_frame = self._raw_frame, None
+            if raw is None:
+                continue
+            self._last_raw = raw
+            try:
+                img = Image.open(BytesIO(raw))
+                # Purane sharer (jo downscale nahi karte) ke saath compatible:
+                # agar screen_info abhi tak nahi aaya to frame ki asal size use
+                # karo. Naya sharer screen_info bhejta hai jo ise override kar deta hai.
+                if self.remote_width is None:
+                    self.remote_width, self.remote_height = img.width, img.height
+                win_w = max(self.win_width, 100)
+                win_h = max(self.win_height, 100)
+                scale = min(win_w / img.width, win_h / img.height)
+                new_size = (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
+                if img.format == "JPEG":
+                    img.draft("RGB", new_size)   # JPEG ko chhota hi decode karo - bohot fast
+                img.load()
+                if img.size != new_size:
+                    img = img.resize(new_size, Image.BILINEAR)
+                ox = (win_w - new_size[0]) // 2
+                oy = (win_h - new_size[1]) // 2
+                with self._frame_lock:
+                    self._pending_frame = (img, ox, oy)
+            except Exception as e:
+                log(f"Decode failed: {e}")
+
     def _poll_frame(self):
-        """Runs on the main/GUI thread at a fixed rate. Renders the latest
-        available frame, if any, then reschedules itself. This decouples
-        rendering from network arrival rate so we never build a backlog."""
+        """GUI thread par: sirf latest frame draw karo."""
         if not self.running:
             return
 
         with self._frame_lock:
-            img = self._pending_frame
-            self._pending_frame = None
+            frame, self._pending_frame = self._pending_frame, None
 
-        if img is not None:
-            self._update_image(img)
+        if frame is not None:
+            self._update_image(*frame)
 
         self.window.after(self.FRAME_POLL_MS, self._poll_frame)
+
+    def _update_image(self, img, ox, oy):
+        self.got_first_frame = True
+        self._photo_ref = ImageTk.PhotoImage(img)
+        self.canvas.itemconfig(self.canvas_image_id, image=self._photo_ref)
+        self.canvas.coords(self.canvas_image_id, ox, oy)
+        if self.status_text_id:
+            self.canvas.itemconfig(self.status_text_id, text="")
+        if self.host_cursor_id is not None:
+            self.canvas.tag_raise(self.host_cursor_id)
+            self.canvas.tag_raise(self.host_cursor_label_id)
 
     def _connection_failed(self):
         if self.canvas and self.status_text_id:
@@ -416,7 +466,14 @@ class ScreenViewer:
             return
         if retry:
             self._connection_lost_shown = False
-            threading.Thread(target=self._connect_control, daemon=True).start()
+            if self.control_sock:
+                try:
+                    self.control_sock.close()
+                except Exception:
+                    pass
+                self.control_sock = None
+            # Screen + control + watchdog teeno dobara start
+            self._start_stream_threads()
         else:
             self.stop()
 
@@ -424,50 +481,38 @@ class ScreenViewer:
         if event.widget is self.window:
             self.win_width = event.width
             self.win_height = event.height
+            # Static screen par bhi naye size par turant re-scale karo
+            with self._frame_lock:
+                if self._raw_frame is None and self._last_raw is not None:
+                    self._raw_frame = self._last_raw
+            self._frame_event.set()
 
-    def _update_image(self, img):
-        self.got_first_frame = True
-        win_w = max(self.win_width, 100)
-        win_h = max(self.win_height, 100)
-        img_w, img_h = img.size
-
-        # Aspect ratio preserve karo - stretch/distort mat karo. Jo shape
-        # match nahi hoti, us hisse ko kaale background se bhar do
-        # (letterbox), jaisa video players karte hain.
-        scale = min(win_w / img_w, win_h / img_h)
-        new_w = max(1, int(img_w * scale))
-        new_h = max(1, int(img_h * scale))
-        if (new_w, new_h) != img.size:
-            img = img.resize((new_w, new_h), Image.LANCZOS)
-
-        canvas_img = Image.new("RGB", (win_w, win_h), (34, 34, 34))
-        offset_x = (win_w - new_w) // 2
-        offset_y = (win_h - new_h) // 2
-        canvas_img.paste(img, (offset_x, offset_y))
-
-        self._photo_ref = ImageTk.PhotoImage(canvas_img)
-        self.canvas.itemconfig(self.canvas_image_id, image=self._photo_ref)
-        if self.status_text_id:
-            self.canvas.itemconfig(self.status_text_id, text="")
-        if self.host_cursor_id is not None:
-            self.canvas.tag_raise(self.host_cursor_id)
-            self.canvas.tag_raise(self.host_cursor_label_id)
-
-    def _connect_control(self):
-        sock = self._connect_relay("control")
+    # ------------------------------------------------------------------
+    # CONTROL
+    # ------------------------------------------------------------------
+    def _connect_control(self, gen):
+        sock = self._connect_relay("control", gen)
         if sock is None:
+            return
+        if gen != self._gen:
+            try:
+                sock.close()
+            except Exception:
+                pass
             return
         self.control_sock = sock
         log("Connected to sharer (control) via relay!")
 
-        threading.Thread(target=self._control_read_loop, daemon=True).start()
-        threading.Thread(target=self._command_send_loop, daemon=True).start()
+        threading.Thread(target=self._control_read_loop, args=(sock, gen), daemon=True).start()
         self._send_command({"action": "identify", "name": self.my_username})
 
-    def _control_read_loop(self):
+    def _control_read_loop(self, sock, gen):
         try:
-            while self.running:
-                raw = self.control_sock.recv()
+            while self.running and gen == self._gen:
+                try:
+                    raw = sock.recv()
+                except websocket.WebSocketTimeoutException:
+                    continue   # idle - normal
                 if not raw or isinstance(raw, bytes):
                     continue
                 try:
@@ -475,18 +520,17 @@ class ScreenViewer:
                 except json.JSONDecodeError:
                     continue
                 self._handle_control_message(msg)
-        except (websocket.WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError):
-            log("Control channel closed")
-            if self.running and self.window:
+        except Exception as e:
+            log(f"Control channel closed: {e}")
+            if self.running and gen == self._gen and self.window:
                 self.window.after(0, self._show_connection_lost)
 
     def _handle_control_message(self, msg):
         action = msg.get("action")
         if action == "screen_info":
-            if self.remote_width is None:
-                self.remote_width = msg.get("width")
-                self.remote_height = msg.get("height")
-                log(f"Remote resolution from screen_info: {self.remote_width}x{self.remote_height}")
+            self.remote_width = msg.get("width")
+            self.remote_height = msg.get("height")
+            log(f"Remote resolution from screen_info: {self.remote_width}x{self.remote_height}")
         elif action == "host_cursor":
             x, y = msg.get("x"), msg.get("y")
             name = msg.get("name", "Sharer")
@@ -544,9 +588,6 @@ class ScreenViewer:
         self._send_file(filepath)
 
     def _on_file_drop(self, event):
-        # event.data mein ek ya zyada paths ho sakte hain, spaces wale
-        # paths curly braces {} mein wrapped aate hain - tk.splitlist
-        # ye sahi tarah parse kar deta hai.
         paths = self.window.tk.splitlist(event.data)
         for path in paths:
             if os.path.isfile(path):
@@ -617,36 +658,56 @@ class ScreenViewer:
         self.canvas.tag_raise(self.host_cursor_id)
         self.canvas.tag_raise(self.host_cursor_label_id)
 
+    # ------------------------------------------------------------------
+    # COMMAND SENDING (mouse move coalescing)
+    # ------------------------------------------------------------------
     def _send_command(self, cmd):
-        # GUI thread se seedha network pe kabhi mat likho - queue kar do,
-        # background thread hi asal socket.send() karega.
-        self._cmd_send_queue.put(cmd)
+        """GUI thread se seedha network pe mat likho. Move commands overwrite
+        hote hain (sirf latest bhejo); baaki commands order mein queue hote hain,
+        aur click se pehle latest move flush hoti hai."""
+        with self._cmd_lock:
+            if cmd.get("action") == "move":
+                self._pending_move = cmd
+            else:
+                if self._pending_move:
+                    self._cmd_send_queue.put(self._pending_move)
+                    self._pending_move = None
+                self._cmd_send_queue.put(cmd)
+        self._cmd_event.set()
+
+    def _raw_send(self, cmd):
+        sock = self.control_sock
+        if not sock:
+            return
+        try:
+            sock.send(json.dumps(cmd))
+        except Exception as e:
+            log(f"Failed to send control command: {e}")
+            time.sleep(0.3)
 
     def _command_send_loop(self):
-        """Background thread jo queue se commands nikal kar bhejta hai.
-        Agar network atki hui ho (send() block ho jaye), sirf ye thread
-        rukta hai - GUI hamesha responsive rehti hai."""
         while self.running:
-            try:
-                cmd = self._cmd_send_queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            if self.control_sock:
+            self._cmd_event.wait(0.5)
+            self._cmd_event.clear()
+            sent_move = False
+            while True:
                 try:
-                    self.control_sock.send(json.dumps(cmd))
-                except Exception as e:
-                    log(f"Failed to send control command: {e}")
-                    # Connection mar chuki hai - is se aage bhejna
-                    # faltu hai, aur naye connect ka wait karna better hai.
-                    time.sleep(0.5)
+                    cmd = self._cmd_send_queue.get_nowait()
+                except queue.Empty:
+                    break
+                self._raw_send(cmd)
+            with self._cmd_lock:
+                move, self._pending_move = self._pending_move, None
+            if move:
+                self._raw_send(move)
+                sent_move = True
+            if sent_move:
+                time.sleep(self.MOVE_SEND_INTERVAL)
 
     def _scale_coords(self, x, y):
         if not self.remote_width or not self.remote_height or not self.win_width or not self.win_height:
             return x, y
 
-        # _update_image jaisa hi letterbox calculation - taake click
-        # exactly wahin jaye jahan image dikh rahi hai, kaali patti
-        # (letterbox) ke offset ko dhyan mein rakhte hue.
         win_w = max(self.win_width, 100)
         win_h = max(self.win_height, 100)
         scale = min(win_w / self.remote_width, win_h / self.remote_height)
@@ -655,8 +716,6 @@ class ScreenViewer:
         offset_x = (win_w - drawn_w) / 2
         offset_y = (win_h - drawn_h) / 2
 
-        # Click position ko image area ke andar clamp karo (kaali patti
-        # pe click ho to nearest edge maan lo).
         rel_x = min(max(x - offset_x, 0), drawn_w)
         rel_y = min(max(y - offset_y, 0), drawn_h)
 
@@ -680,9 +739,7 @@ class ScreenViewer:
         self._send_command({"action": "mouse_down", "x": x, "y": y, "button": button})
 
     def _on_drag(self, event):
-        # Jab tak viewer window ke apne (unscaled) pixels mein itni
-        # distance na ho jaye, "move" bhejo hi mat - taake click ke
-        # waqt hath ki chhoti jitter sharer tak pahunche hi nahi.
+        # Chhoti hath ki jitter ko sharer tak mat bhejo.
         if self._mouse_down_pos:
             dx = abs(event.x - self._mouse_down_pos[0])
             dy = abs(event.y - self._mouse_down_pos[1])
@@ -712,12 +769,8 @@ class ScreenViewer:
         shift_held = "shift_l" in self._modifiers_held or "shift_r" in self._modifiers_held
         win_held = "super_l" in self._modifiers_held or "super_r" in self._modifiers_held
 
-        # Ctrl/Alt ke sath koi bhi key = shortcut (Ctrl+C, Alt+Tab).
-        # Sirf Shift ke sath bhi tab hotkey banao jab key ek "named" key
-        # ho (arrow, Home, End, Delete, Tab, F2 waghera) - Shift+Arrow
-        # text selection extend karta hai, jo sirf plain "left"/"right"
-        # bhejne se nahi hota. Shift+letter (jaise 'A') already event.char
-        # se sahi (capital) mil jata hai, usay yahan chhedne ki zaroorat nahi.
+        # Ctrl/Alt ke sath koi bhi key = shortcut. Shift ke sath sirf named
+        # keys (arrow, Home, End...) hotkey banti hain; Shift+letter event.char se aa jata hai.
         needs_shift_combo = shift_held and keysym in self.KEY_MAP
 
         if ctrl_held or alt_held or win_held or needs_shift_combo:
@@ -783,6 +836,9 @@ class ScreenViewer:
 
     def stop(self):
         self.running = False
+        self._gen += 1
+        self._frame_event.set()
+        self._cmd_event.set()
         if self._win_snap_guard:
             self._win_snap_guard.stop()
             self._win_snap_guard = None
