@@ -175,6 +175,7 @@ class MainWindow:
         self.token = token
         self.user_data = user_data
         self.pin_visible = False
+        self._ws_state = "connecting"  # connecting / connected / disconnected
 
         self.root.title("SkyDesk - Dashboard")
         self.root.configure(bg=Theme.BG)
@@ -250,11 +251,19 @@ class MainWindow:
         self.copy_btn.pack(side="left", padx=(10, 0), pady=(3, 0))
         self.copy_btn.bind("<Button-1>", lambda e: self._copy_remote_id())
 
+        status_row = tk.Frame(ic, bg=Theme.CARD_BG)
+        status_row.pack(pady=(14, 0))
         self.status_pill = tk.Label(
-            ic, text="  \u25CF  Connecting...  ", font=("Segoe UI", 9, "bold"),
+            status_row, text="  \u25CF  Connecting...  ", font=("Segoe UI", 9, "bold"),
             bg=Theme.CONNECTING_BG, fg=Theme.CONNECTING, padx=4, pady=3
         )
-        self.status_pill.pack(pady=(14, 0))
+        self.status_pill.pack(side="left")
+        self.refresh_btn = tk.Label(
+            status_row, text="  \u21BB  Refresh  ", font=("Segoe UI", 9, "bold"),
+            bg=Theme.ACCENT_SOFT, fg=Theme.ACCENT_HOVER, padx=4, pady=3, cursor="hand2"
+        )
+        self.refresh_btn.pack(side="left", padx=(8, 0))
+        self.refresh_btn.bind("<Button-1>", lambda e: self.refresh_dashboard())
 
         # ---- Connect card (dynamic height) ----
         self.connect_card = RoundedCard(content, width=540, height=self.CONNECT_CARD_COLLAPSED_H, radius=18)
@@ -476,11 +485,31 @@ class MainWindow:
     # Connection status
     # ---------------------------------------------------------------
     def update_connection_status(self, connected):
+        self._ws_state = "connected" if connected else "disconnected"
         if connected:
             self.status_pill.config(text="  \u25CF  Online  ", bg=Theme.ONLINE_BG, fg=Theme.ONLINE)
             self._request_online_status_for_recent()
         else:
             self.status_pill.config(text="  \u25CF  Disconnected  ", bg=Theme.OFFLINE_BG, fg=Theme.OFFLINE)
+
+    def refresh_dashboard(self):
+        """App band kiye baghair: recent sessions dobara load, online status
+        dobara check, aur connection toota ho to reconnect ki koshish."""
+        try:
+            self.refresh_btn.config(text="  \u21BB  Refreshing...  ")
+            self._refresh_recent_sessions_ui()
+            state = getattr(self, "_ws_state", "connecting")
+            if state == "connected":
+                self._request_online_status_for_recent()
+            elif state == "disconnected":
+                self._ws_state = "connecting"
+                self.status_pill.config(
+                    text="  \u25CF  Connecting...  ", bg=Theme.CONNECTING_BG, fg=Theme.CONNECTING
+                )
+                self.ws_client.connect()
+        except Exception as e:
+            log(f"Refresh error: {e}")
+        self.root.after(1200, lambda: self.refresh_btn.config(text="  \u21BB  Refresh  "))
 
     def connect_request(self):
         typed_id = self.remote_id_entry.get().strip()
@@ -535,8 +564,9 @@ class MainWindow:
                 pass
 
     def _process_message(self, data):
-        self._bring_to_front()
         msg_type = data.get("type")
+        if msg_type != "online_status_result":
+            self._bring_to_front()
 
         if msg_type == "id_connect_request":
             from_id = data.get("from_remote_id")
