@@ -407,10 +407,32 @@ class ScreenViewer:
             except Exception as e:
                 log(f"Decode failed: {e}")
 
+    def _sync_window_size(self):
+        """Window ka asal size dobara check karo (main/GUI thread par safe).
+        Zoom/maximize ke waqt Configure event kabhi kabhi miss ho jata hai,
+        jis se purana (chhota) size hamesha ke liye "stuck" reh jata hai aur
+        screen hamesha chhoti dikhti hai. Ye har tick par size taaza rakhta hai."""
+        if not self.window:
+            return
+        try:
+            w = self.window.winfo_width()
+            h = self.window.winfo_height()
+        except Exception:
+            return
+        if w > 50 and h > 50 and (w != self.win_width or h != self.win_height):
+            self.win_width = w
+            self.win_height = h
+            with self._frame_lock:
+                if self._raw_frame is None and self._last_raw is not None:
+                    self._raw_frame = self._last_raw
+            self._frame_event.set()
+
     def _poll_frame(self):
         """GUI thread par: sirf latest frame draw karo."""
         if not self.running:
             return
+
+        self._sync_window_size()
 
         with self._frame_lock:
             frame, self._pending_frame = self._pending_frame, None
